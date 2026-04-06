@@ -70,7 +70,7 @@ android {
         }
         debug {
             minifyEnabled false
-            // signingConfig signingConfigs.release
+            signingConfig signingConfigs.release
             debuggable true
         }
     }
