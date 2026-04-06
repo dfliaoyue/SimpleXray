@@ -100,12 +100,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Release APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease
 
       - name: Find and Copy APKs
         run: |
           mkdir -p apks
-          find app/build/outputs/apk/debug -name "*.apk" -exec cp {} apks/ \;
+          find app/build/outputs/apk/release -name "*.apk" -exec cp {} apks/ \;
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
