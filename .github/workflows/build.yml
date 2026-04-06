@@ -100,7 +100,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleDebug
 
       - name: Find and Copy APKs
         run: |
