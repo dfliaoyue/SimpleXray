@@ -105,7 +105,7 @@ jobs:
       - name: Find and Copy APKs
         run: |
           mkdir -p apks
-          find app/build/outputs/apk/release -name "*.apk" -exec cp {} apks/ \;
+          find app/build/outputs/apk/debug -name "*.apk" -exec cp {} apks/ \;
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
