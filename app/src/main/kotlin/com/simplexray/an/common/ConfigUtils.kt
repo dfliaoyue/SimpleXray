@@ -25,30 +25,6 @@ object ConfigUtils {
         return null
     }
 
-    fun injectXrayTunFd(configContent: String, fd: Int, tunName: String): String {
-        return try {
-            val jsonObject = JSONObject(configContent)
-            val inbounds = jsonObject.optJSONArray("inbounds")
-            if (inbounds != null) {
-                for (i in 0 until inbounds.length()) {
-                    val inbound = inbounds.optJSONObject(i) ?: continue
-                    if (inbound.optString("type") == "tun") {
-                        val settings = inbound.optJSONObject("settings") ?: JSONObject().also {
-                            inbound.put("settings", it)
-                        }
-                        settings.put("fd", fd)
-                        settings.put("name", tunName)
-                        break
-                    }
-                }
-            }
-            jsonObject.toString(2)
-        } catch (e: JSONException) {
-            Log.e(TAG, "Error injecting Xray TUN fd", e)
-            configContent
-        }
-    }
-
     @Throws(JSONException::class)
     fun formatConfigContent(content: String): String {
         val jsonObject = JSONObject(content)

@@ -15,7 +15,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.system.Os
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.simplexray.an.BuildConfig
@@ -190,21 +189,15 @@ class TProxyService : VpnService() {
             prefs.apiAddress = "127.$octet2.$octet3.$octet4"
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
-            val processBuilder = getProcessBuilder(xrayPath)
+            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+            val xrayTunFd = if (useXrayTun) tunFd?.fd else null
+            val processBuilder = getProcessBuilder(xrayPath, xrayTunFd)
             currentProcess = processBuilder.start()
             this.xrayProcess = currentProcess
 
             Log.d(TAG, "Writing config to xray stdin from: $selectedConfigPath")
-            var injectedConfigContent =
+            val injectedConfigContent =
                 ConfigUtils.injectStatsService(prefs, configContent)
-            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
-            if (useXrayTun) {
-                tunFd?.fd?.let { fd ->
-                    val tunName = getTunName(fd)
-                    injectedConfigContent = ConfigUtils.injectXrayTunFd(injectedConfigContent, fd, tunName)
-                    Log.d(TAG, "Injected Xray TUN fd=$fd, name=$tunName")
-                }
-            }
             currentProcess.outputStream.use { os ->
                 os.write(injectedConfigContent.toByteArray())
                 os.flush()
@@ -245,12 +238,17 @@ class TProxyService : VpnService() {
         }
     }
 
-    private fun getProcessBuilder(xrayPath: String): ProcessBuilder {
+    private fun getProcessBuilder(xrayPath: String, tunFd: Int? = null): ProcessBuilder {
         val filesDir = applicationContext.filesDir
         val command: MutableList<String> = mutableListOf(xrayPath)
         val processBuilder = ProcessBuilder(command)
         val environment = processBuilder.environment()
         environment["XRAY_LOCATION_ASSET"] = filesDir.path
+        if (tunFd != null) {
+            // Xray TUN on Android reads the VPN fd from this environment variable
+            environment["XRAY_TUN_FD"] = tunFd.toString()
+            Log.d(TAG, "Set XRAY_TUN_FD=$tunFd")
+        }
         processBuilder.directory(filesDir)
         processBuilder.redirectErrorStream(true)
         return processBuilder
@@ -453,15 +451,6 @@ class TProxyService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error getting native library dir", e)
                 return null
-            }
-        }
-
-        fun getTunName(fd: Int): String {
-            return try {
-                Os.readlink("/proc/self/fd/$fd").substringAfterLast("/")
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not determine TUN interface name: ${e.message}")
-                "tun0"
             }
         }
 

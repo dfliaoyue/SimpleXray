@@ -97,6 +97,14 @@ class MainViewModel(application: Application) :
                 useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
             ),
+            info = InfoStates(
+                appVersion = BuildConfig.VERSION_NAME,
+                kernelVersion = "N/A",
+                geoipSummary = "",
+                geositeSummary = "",
+                geoipUrl = prefs.geoipUrl,
+                geositeUrl = prefs.geositeUrl
+            ),
             files = FileStates(
                 isGeoipCustom = prefs.customGeoipImported,
                 isGeositeCustom = prefs.customGeositeImported
@@ -188,6 +196,7 @@ class MainViewModel(application: Application) :
                 useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
             ),
+            info = _settingsState.value.info.copy(
                 appVersion = BuildConfig.VERSION_NAME,
                 geoipSummary = fileManager.getRuleFileSummary("geoip.dat"),
                 geositeSummary = fileManager.getRuleFileSummary("geosite.dat"),
