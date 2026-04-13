@@ -94,6 +94,7 @@ class MainViewModel(application: Application) :
                 httpProxyEnabled = prefs.httpProxyEnabled,
                 bypassLanEnabled = prefs.bypassLan,
                 disableVpn = prefs.disableVpn,
+                useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
             ),
             info = InfoStates(
@@ -192,6 +193,7 @@ class MainViewModel(application: Application) :
                 httpProxyEnabled = prefs.httpProxyEnabled,
                 bypassLanEnabled = prefs.bypassLan,
                 disableVpn = prefs.disableVpn,
+                useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
             ),
             info = _settingsState.value.info.copy(
@@ -543,6 +545,13 @@ class MainViewModel(application: Application) :
         prefs.disableVpn = enabled
         _settingsState.value = _settingsState.value.copy(
             switches = _settingsState.value.switches.copy(disableVpn = enabled)
+        )
+    }
+
+    fun setUseXrayTun(enabled: Boolean) {
+        prefs.useXrayTun = enabled
+        _settingsState.value = _settingsState.value.copy(
+            switches = _settingsState.value.switches.copy(useXrayTun = enabled)
         )
     }
 

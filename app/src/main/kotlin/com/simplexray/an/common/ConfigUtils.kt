@@ -8,6 +8,23 @@ import org.json.JSONObject
 object ConfigUtils {
     private const val TAG = "ConfigUtils"
 
+    fun extractTunMtu(configContent: String): Int? {
+        try {
+            val jsonObject = JSONObject(configContent)
+            val inbounds = jsonObject.optJSONArray("inbounds") ?: return null
+            for (i in 0 until inbounds.length()) {
+                val inbound = inbounds.optJSONObject(i) ?: continue
+                if (inbound.optString("type") == "tun") {
+                    return inbound.optJSONObject("settings")?.optInt("mtu", -1)
+                        ?.takeIf { it > 0 }
+                }
+            }
+        } catch (e: JSONException) {
+            Log.e(TAG, "Error parsing JSON for TUN MTU extraction", e)
+        }
+        return null
+    }
+
     @Throws(JSONException::class)
     fun formatConfigContent(content: String): String {
         val jsonObject = JSONObject(content)
