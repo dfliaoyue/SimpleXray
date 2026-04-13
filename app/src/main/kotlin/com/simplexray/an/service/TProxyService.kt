@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.simplexray.an.BuildConfig
@@ -194,8 +195,16 @@ class TProxyService : VpnService() {
             this.xrayProcess = currentProcess
 
             Log.d(TAG, "Writing config to xray stdin from: $selectedConfigPath")
-            val injectedConfigContent =
+            var injectedConfigContent =
                 ConfigUtils.injectStatsService(prefs, configContent)
+            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+            if (useXrayTun) {
+                tunFd?.fd?.let { fd ->
+                    val tunName = getTunName(fd)
+                    injectedConfigContent = ConfigUtils.injectXrayTunFd(injectedConfigContent, fd, tunName)
+                    Log.d(TAG, "Injected Xray TUN fd=$fd, name=$tunName")
+                }
+            }
             currentProcess.outputStream.use { os ->
                 os.write(injectedConfigContent.toByteArray())
                 os.flush()
@@ -263,30 +272,42 @@ class TProxyService : VpnService() {
     private fun startService() {
         if (tunFd != null) return
         val prefs = Preferences(this)
-        val builder = getVpnBuilder(prefs)
+        val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+        val tunMtu = if (useXrayTun) {
+            val configPath = prefs.selectedConfigPath
+            val mtu = configPath?.let { path ->
+                runCatching { ConfigUtils.extractTunMtu(File(path).readText()) }.getOrNull()
+            }
+            mtu ?: prefs.tunnelMtu
+        } else {
+            prefs.tunnelMtu
+        }
+        val builder = getVpnBuilder(prefs, tunMtu)
         tunFd = builder.establish()
         if (tunFd == null) {
             stopXray()
             return
         }
-        val tproxyFile = File(cacheDir, "tproxy.conf")
-        try {
-            tproxyFile.createNewFile()
-            FileOutputStream(tproxyFile, false).use { fos ->
-                val tproxyConf = getTproxyConf(prefs)
-                fos.write(tproxyConf.toByteArray())
+        if (!useXrayTun) {
+            val tproxyFile = File(cacheDir, "tproxy.conf")
+            try {
+                tproxyFile.createNewFile()
+                FileOutputStream(tproxyFile, false).use { fos ->
+                    val tproxyConf = getTproxyConf(prefs)
+                    fos.write(tproxyConf.toByteArray())
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, e.toString())
+                stopXray()
+                return
             }
-        } catch (e: IOException) {
-            Log.e(TAG, e.toString())
-            stopXray()
-            return
-        }
-        tunFd?.fd?.let { fd ->
-            TProxyStartService(tproxyFile.absolutePath, fd)
-        } ?: run {
-            Log.e(TAG, "tunFd is null after establish()")
-            stopXray()
-            return
+            tunFd?.fd?.let { fd ->
+                TProxyStartService(tproxyFile.absolutePath, fd)
+            } ?: run {
+                Log.e(TAG, "tunFd is null after establish()")
+                stopXray()
+                return
+            }
         }
 
         val successIntent = Intent(ACTION_START)
@@ -297,9 +318,9 @@ class TProxyService : VpnService() {
         createNotification(channelName)
     }
 
-    private fun getVpnBuilder(prefs: Preferences): Builder = Builder().apply {
+    private fun getVpnBuilder(prefs: Preferences, mtu: Int = prefs.tunnelMtu): Builder = Builder().apply {
         setBlocking(false)
-        setMtu(prefs.tunnelMtu)
+        setMtu(mtu)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             setMetered(false)
@@ -348,7 +369,10 @@ class TProxyService : VpnService() {
                 tunFd = null
             }
             stopForeground(Service.STOP_FOREGROUND_REMOVE)
-            TProxyStopService()
+            val prefs = Preferences(this)
+            if (!prefs.useXrayTun || prefs.disableVpn) {
+                TProxyStopService()
+            }
         }
         exit()
     }
@@ -429,6 +453,15 @@ class TProxyService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error getting native library dir", e)
                 return null
+            }
+        }
+
+        fun getTunName(fd: Int): String {
+            return try {
+                Os.readlink("/proc/self/fd/$fd").substringAfterLast("/")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not determine TUN interface name: ${e.message}")
+                "tun0"
             }
         }
 

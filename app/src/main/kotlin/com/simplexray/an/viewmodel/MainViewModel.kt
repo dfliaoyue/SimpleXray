@@ -94,15 +94,8 @@ class MainViewModel(application: Application) :
                 httpProxyEnabled = prefs.httpProxyEnabled,
                 bypassLanEnabled = prefs.bypassLan,
                 disableVpn = prefs.disableVpn,
+                useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
-            ),
-            info = InfoStates(
-                appVersion = BuildConfig.VERSION_NAME,
-                kernelVersion = "N/A",
-                geoipSummary = "",
-                geositeSummary = "",
-                geoipUrl = prefs.geoipUrl,
-                geositeUrl = prefs.geositeUrl
             ),
             files = FileStates(
                 isGeoipCustom = prefs.customGeoipImported,
@@ -192,9 +185,9 @@ class MainViewModel(application: Application) :
                 httpProxyEnabled = prefs.httpProxyEnabled,
                 bypassLanEnabled = prefs.bypassLan,
                 disableVpn = prefs.disableVpn,
+                useXrayTun = prefs.useXrayTun,
                 themeMode = prefs.theme
             ),
-            info = _settingsState.value.info.copy(
                 appVersion = BuildConfig.VERSION_NAME,
                 geoipSummary = fileManager.getRuleFileSummary("geoip.dat"),
                 geositeSummary = fileManager.getRuleFileSummary("geosite.dat"),
@@ -543,6 +536,13 @@ class MainViewModel(application: Application) :
         prefs.disableVpn = enabled
         _settingsState.value = _settingsState.value.copy(
             switches = _settingsState.value.switches.copy(disableVpn = enabled)
+        )
+    }
+
+    fun setUseXrayTun(enabled: Boolean) {
+        prefs.useXrayTun = enabled
+        _settingsState.value = _settingsState.value.copy(
+            switches = _settingsState.value.switches.copy(useXrayTun = enabled)
         )
     }
 
