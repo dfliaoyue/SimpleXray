@@ -271,16 +271,16 @@ class TProxyService : VpnService() {
 
             // ── Shared log-reading loop ────────────────────────────────────────
             Log.d(TAG, "Reading xray process output.")
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                val l = line!!
-                logFileManager.appendLog(l)
+            var line = reader.readLine()
+            while (line != null) {
+                logFileManager.appendLog(line)
                 synchronized(logBroadcastBuffer) {
-                    logBroadcastBuffer.add(l)
+                    logBroadcastBuffer.add(line)
                     if (!handler.hasCallbacks(broadcastLogsRunnable)) {
                         handler.postDelayed(broadcastLogsRunnable, BROADCAST_DELAY_MS)
                     }
                 }
+                line = reader.readLine()
             }
             Log.d(TAG, "xray process output stream finished.")
         } catch (e: InterruptedIOException) {
