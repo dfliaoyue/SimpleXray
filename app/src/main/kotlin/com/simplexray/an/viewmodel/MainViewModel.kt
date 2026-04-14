@@ -843,14 +843,19 @@ class MainViewModel(application: Application) :
             }
             try {
                 // Connect through the SOCKS5 proxy for HEV TUN mode.
+                // Use createUnresolved so the hostname is forwarded to the SOCKS5 proxy
+                // rather than being resolved locally via system DNS first.  Local DNS
+                // resolution can return a real (non-CN) Google IP that Xray routes via
+                // the freedom (direct) outbound instead of the proxy outbound.
                 val proxy =
                     Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
-                    socket.connect(InetSocketAddress(host, port), timeout)
+                    socket.connect(InetSocketAddress.createUnresolved(host, port), timeout)
                     val (writer, reader) = if (isHttps) {
                         val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
                             .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+                        sslSocket.soTimeout = timeout
                         sslSocket.startHandshake()
                         Pair(
                             sslSocket.outputStream.bufferedWriter(),
