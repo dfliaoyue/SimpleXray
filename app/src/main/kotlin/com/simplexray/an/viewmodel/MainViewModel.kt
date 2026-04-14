@@ -808,17 +808,20 @@ class MainViewModel(application: Application) :
                     return@launch
                 }
                 val socket = Socket()
+                var sslSocket: javax.net.ssl.SSLSocket? = null
                 try {
                     vpnNetwork.bindSocket(socket)
                     socket.soTimeout = timeout
                     socket.connect(InetSocketAddress(host, port), timeout)
                     val (writer, reader) = if (isHttps) {
-                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                        val ssl = (SSLSocketFactory.getDefault() as SSLSocketFactory)
                             .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                        sslSocket.startHandshake()
+                        ssl.soTimeout = timeout
+                        ssl.startHandshake()
+                        sslSocket = ssl
                         Pair(
-                            sslSocket.outputStream.bufferedWriter(),
-                            sslSocket.inputStream.bufferedReader()
+                            ssl.outputStream.bufferedWriter(),
+                            ssl.inputStream.bufferedReader()
                         )
                     } else {
                         Pair(
@@ -853,6 +856,7 @@ class MainViewModel(application: Application) :
                         )
                     )
                 } finally {
+                    sslSocket?.close()
                     socket.close()
                 }
                 return@launch
