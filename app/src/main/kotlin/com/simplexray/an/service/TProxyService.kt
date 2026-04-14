@@ -340,7 +340,7 @@ class TProxyService : VpnService() {
             val mtu = configPath?.let { path ->
                 runCatching { ConfigUtils.extractTunMtu(File(path).readText()) }.getOrNull()
             }
-            mtu ?: prefs.tunnelMtu
+            mtu ?: prefs.tunnelMtuForXrayTun
         } else {
             prefs.tunnelMtu
         }
