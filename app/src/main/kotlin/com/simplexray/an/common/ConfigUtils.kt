@@ -52,6 +52,7 @@ object ConfigUtils {
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
         val servicesArray = org.json.JSONArray()
         servicesArray.put("StatsService")
+        servicesArray.put("HandlerService")
         apiObject.put("services", servicesArray)
 
         jsonObject.put("api", apiObject)

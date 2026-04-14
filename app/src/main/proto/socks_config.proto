@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package xray.proxy.socks;
+
+option java_package = "com.xray.proxy.socks";
+option java_multiple_files = true;
+
+// Minimal subset of xray-core/proxy/socks/config.proto.
+// Field numbers match xray-core exactly so that serialised bytes are compatible.
+
+enum AuthType {
+    NO_AUTH = 0;
+    PASSWORD = 1;
+}
+
+message ServerConfig {
+    AuthType auth_type = 1;
+    map<string, string> accounts = 2;
+}
