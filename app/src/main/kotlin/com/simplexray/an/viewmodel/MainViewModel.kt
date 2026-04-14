@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -50,7 +48,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -791,71 +788,17 @@ class MainViewModel(application: Application) :
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
-            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
-            if (useXrayTun) {
-                // In Xray TUN mode the app is excluded from VPN routing via
-                // addDisallowedApplication, so its sockets normally bypass the TUN.
-                // Network.openConnection() binds both DNS resolution and the TCP
-                // connection to the VPN network, so traffic is routed through
-                // Xray's TUN inbound (including FakeDNS support) without needing
-                // a SOCKS inbound or manual socket manipulation.
-                val cm = application.getSystemService(ConnectivityManager::class.java)
-                try {
-                    val vpnNetwork = cm.allNetworks.firstOrNull { network ->
-                        val caps = cm.getNetworkCapabilities(network)
-                        caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    } ?: throw Exception("VPN network not found")
-                    val conn = vpnNetwork.openConnection(url) as HttpURLConnection
-                    conn.connectTimeout = timeout
-                    conn.readTimeout = timeout
-                    conn.instanceFollowRedirects = false
-                    try {
-                        conn.connect()
-                        val responseCode = conn.responseCode
-                        val latency = System.currentTimeMillis() - start
-                        if (responseCode > 0) {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(
-                                        R.string.connectivity_test_latency,
-                                        latency.toInt()
-                                    )
-                                )
-                            )
-                        } else {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(R.string.connectivity_test_failed)
-                                )
-                            )
-                        }
-                    } finally {
-                        conn.disconnect()
-                    }
-                } catch (e: Exception) {
-                    _uiEvent.trySend(
-                        MainViewUiEvent.ShowSnackbar(
-                            application.getString(R.string.connectivity_test_failed)
-                        )
-                    )
-                }
-                return@launch
-            }
             try {
-                // Connect through the SOCKS5 proxy for HEV TUN mode.
-                // Use createUnresolved so the hostname is forwarded to the SOCKS5 proxy
-                // rather than being resolved locally via system DNS first.  Local DNS
-                // resolution can return a real (non-CN) Google IP that Xray routes via
-                // the freedom (direct) outbound instead of the proxy outbound.
+                // Connect through the SOCKS5 proxy. Xray always runs a SOCKS5 inbound
+                // regardless of whether it is in HEV TUN or Xray TUN mode.
                 val proxy =
                     Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
-                    socket.connect(InetSocketAddress.createUnresolved(host, port), timeout)
+                    socket.connect(InetSocketAddress(host, port), timeout)
                     val (writer, reader) = if (isHttps) {
                         val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
                             .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                        sslSocket.soTimeout = timeout
                         sslSocket.startHandshake()
                         Pair(
                             sslSocket.outputStream.bufferedWriter(),
