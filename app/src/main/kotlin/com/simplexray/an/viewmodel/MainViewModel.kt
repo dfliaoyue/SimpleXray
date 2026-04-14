@@ -890,8 +890,8 @@ class MainViewModel(application: Application) :
             output.flush()
 
             // Server selects a method
-            val ver = input.read()
-            val method = input.read()
+            val ver = readByte(input)
+            val method = readByte(input)
             if (ver != 5) throw IOException("SOCKS5: unexpected server version $ver")
 
             when (method) {
@@ -910,8 +910,8 @@ class MainViewModel(application: Application) :
                     passBytes.copyInto(authMsg, idx)
                     output.write(authMsg)
                     output.flush()
-                    input.read()  // sub-negotiation version in response
-                    val status = input.read()
+                    readByte(input)  // sub-negotiation version in response
+                    val status = readByte(input)
                     if (status != 0x00) throw IOException("SOCKS5: authentication failed")
                 }
                 0xFF -> throw IOException("SOCKS5: no acceptable authentication method")
@@ -934,21 +934,21 @@ class MainViewModel(application: Application) :
             output.flush()
 
             // Read CONNECT response
-            input.read()  // VER
-            val rep = input.read()
-            input.read()  // RSV
-            val atyp = input.read()
+            readByte(input)  // VER
+            val rep = readByte(input)
+            readByte(input)  // RSV
+            val atyp = readByte(input)
             // Skip the bound address
             val skipBytes = when (atyp) {
-                0x01 -> 4   // IPv4
-                0x03 -> input.read()  // domain: length byte followed by that many bytes
-                0x04 -> 16  // IPv6
+                0x01 -> 4               // IPv4
+                0x03 -> readByte(input) // domain: length byte followed by that many bytes
+                0x04 -> 16              // IPv6
                 else -> 0
             }
             val skipBuf = ByteArray(skipBytes)
             var read = 0
             while (read < skipBytes) read += input.read(skipBuf, read, skipBytes - read)
-            input.read(); input.read()  // BND.PORT
+            readByte(input); readByte(input)  // BND.PORT
 
             if (rep != 0x00) throw IOException("SOCKS5: CONNECT failed with reply code $rep")
             return socket
@@ -956,6 +956,14 @@ class MainViewModel(application: Application) :
             socket.close()
             throw e
         }
+    }
+
+    /** Reads exactly one byte from [input], throwing [IOException] on end of stream. */
+    @Throws(IOException::class)
+    private fun readByte(input: java.io.InputStream): Int {
+        val b = input.read()
+        if (b == -1) throw IOException("SOCKS5: unexpected end of stream")
+        return b
     }
 
     fun registerTProxyServiceReceivers() {
