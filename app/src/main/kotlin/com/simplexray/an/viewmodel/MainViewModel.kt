@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -794,24 +792,14 @@ class MainViewModel(application: Application) :
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
             if (useXrayTun) {
                 // In Xray TUN mode the app is excluded from VPN routing via
-                // addDisallowedApplication, so its sockets bypass the TUN by default.
-                // Explicitly bind to the VPN network so the connection goes through
-                // Xray's TUN inbound without needing a SOCKS inbound.
-                val cm = application.getSystemService(ConnectivityManager::class.java)
-                val vpnNetwork = cm.allNetworks.firstOrNull { network ->
-                    val caps = cm.getNetworkCapabilities(network)
-                    caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                }
-                if (vpnNetwork == null) {
-                    _uiEvent.trySend(
-                        MainViewUiEvent.ShowSnackbar(
-                            application.getString(R.string.connectivity_test_failed)
-                        )
-                    )
-                    return@launch
-                }
+                // addDisallowedApplication (to prevent Xray's outbound from looping through
+                // the TUN).  As a result, the app's own sockets also bypass the TUN and go
+                // directly to the internet.  ConnectivityManager.getAllNetworks() filters out
+                // VPN networks for excluded UIDs, so vpnNetwork would always be null and
+                // Network.openConnection() would be unreliable even with a cached reference.
+                // We therefore perform a direct internet test without any VPN/SOCKS binding.
                 try {
-                    val conn = vpnNetwork.openConnection(url) as HttpURLConnection
+                    val conn = url.openConnection() as HttpURLConnection
                     conn.connectTimeout = timeout
                     conn.readTimeout = timeout
                     conn.instanceFollowRedirects = false
