@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -48,6 +50,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -788,9 +791,63 @@ class MainViewModel(application: Application) :
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
+            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+            if (useXrayTun) {
+                // In Xray TUN mode the app is excluded from VPN routing via
+                // addDisallowedApplication, so its sockets bypass the TUN by default.
+                // Explicitly bind to the VPN network so the connection goes through
+                // Xray's TUN inbound without needing a SOCKS inbound.
+                val cm = application.getSystemService(ConnectivityManager::class.java)
+                val vpnNetwork = cm.allNetworks.firstOrNull { network ->
+                    val caps = cm.getNetworkCapabilities(network)
+                    caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                }
+                if (vpnNetwork == null) {
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(
+                            application.getString(R.string.connectivity_test_failed)
+                        )
+                    )
+                    return@launch
+                }
+                try {
+                    val conn = vpnNetwork.openConnection(url) as HttpURLConnection
+                    conn.connectTimeout = timeout
+                    conn.readTimeout = timeout
+                    conn.instanceFollowRedirects = false
+                    try {
+                        val responseCode = conn.responseCode
+                        val latency = System.currentTimeMillis() - start
+                        if (responseCode in 100..599) {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(
+                                        R.string.connectivity_test_latency,
+                                        latency.toInt()
+                                    )
+                                )
+                            )
+                        } else {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(R.string.connectivity_test_failed)
+                                )
+                            )
+                        }
+                    } finally {
+                        conn.disconnect()
+                    }
+                } catch (e: Exception) {
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(
+                            application.getString(R.string.connectivity_test_failed)
+                        )
+                    )
+                }
+                return@launch
+            }
             try {
-                // Connect through the SOCKS5 proxy. Xray always runs a SOCKS5 inbound
-                // regardless of whether it is in HEV TUN or Xray TUN mode.
+                // HEV TUN mode: connect through the SOCKS5 proxy.
                 val proxy =
                     Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
                 Socket(proxy).use { socket ->
