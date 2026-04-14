@@ -15,7 +15,7 @@ object ConfigUtils {
             for (i in 0 until inbounds.length()) {
                 val inbound = inbounds.optJSONObject(i) ?: continue
                 if (inbound.optString("type") == "tun") {
-                    return inbound.optJSONObject("settings")?.optInt("mtu", -1)
+                    return inbound.optJSONObject("settings")?.optInt("MTU", -1)
                         ?.takeIf { it > 0 }
                 }
             }
