@@ -859,7 +859,6 @@ class MainViewModel(application: Application) :
                                     try {
                                         socket.use {
                                             it.soTimeout = socksTimeout
-                                            val start = System.currentTimeMillis()
                                             it.connect(InetSocketAddress.createUnresolved(host, port), socksTimeout)
                                             val (writer, reader) = if (isHttps) {
                                                 val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
@@ -875,6 +874,7 @@ class MainViewModel(application: Application) :
                                                     it.getInputStream().bufferedReader()
                                                 )
                                             }
+                                            val start = System.currentTimeMillis()
                                             writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
                                             writer.flush()
                                             val firstLine = reader.readLine()
@@ -915,7 +915,6 @@ class MainViewModel(application: Application) :
             try {
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
-                    val start = System.currentTimeMillis()
                     socket.connect(InetSocketAddress(host, port), timeout)
                     val (writer, reader) = if (isHttps) {
                         val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
@@ -931,6 +930,7 @@ class MainViewModel(application: Application) :
                             socket.getInputStream().bufferedReader()
                         )
                     }
+                    val start = System.currentTimeMillis()
                     writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
                     writer.flush()
                     val firstLine = reader.readLine()
