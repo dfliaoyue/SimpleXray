@@ -1,7 +1,6 @@
 package com.simplexray.an.common
 
 import android.util.Log
-import com.google.protobuf.Any
 import com.google.protobuf.ByteString
 import com.xray.app.proxyman.PortList
 import com.xray.app.proxyman.PortRange
@@ -10,8 +9,8 @@ import com.xray.app.proxyman.command.AddInboundRequest
 import com.xray.app.proxyman.command.HandlerServiceGrpc
 import com.xray.app.proxyman.command.RemoveInboundRequest
 import com.xray.common.net.IPOrDomain
+import com.xray.common.serial.TypedMessage
 import com.xray.core.InboundHandlerConfig
-import com.xray.proxy.socks.Account
 import com.xray.proxy.socks.AuthType
 import com.xray.proxy.socks.ServerConfig
 import io.grpc.ManagedChannel
@@ -51,13 +50,9 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
                 .build()
 
             val socksConfig = if (username.isNotEmpty() && password.isNotEmpty()) {
-                val account = Account.newBuilder()
-                    .setUsername(username)
-                    .setPassword(password)
-                    .build()
                 ServerConfig.newBuilder()
                     .setAuthType(AuthType.PASSWORD)
-                    .addAccounts(account)
+                    .putAccounts(username, password)
                     .build()
             } else {
                 ServerConfig.newBuilder()
@@ -67,8 +62,18 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
 
             val inboundConfig = InboundHandlerConfig.newBuilder()
                 .setTag(tag)
-                .setReceiverSettings(Any.pack(receiverConfig))
-                .setProxySettings(Any.pack(socksConfig))
+                .setReceiverSettings(
+                    TypedMessage.newBuilder()
+                        .setType("xray.app.proxyman.ReceiverConfig")
+                        .setValue(receiverConfig.toByteString())
+                        .build()
+                )
+                .setProxySettings(
+                    TypedMessage.newBuilder()
+                        .setType("xray.proxy.socks.ServerConfig")
+                        .setValue(socksConfig.toByteString())
+                        .build()
+                )
                 .build()
 
             stub.addInbound(AddInboundRequest.newBuilder().setInbound(inboundConfig).build())
