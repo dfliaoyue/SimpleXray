@@ -48,7 +48,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -789,29 +788,41 @@ class MainViewModel(application: Application) :
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
-            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
             try {
-                if (useXrayTun) {
-                    // In Xray TUN mode, Xray handles the TUN interface natively and the
-                    // SimpleXray app itself is excluded from VPN routing. Use a direct
-                    // connection (no SOCKS proxy) since there may be no SOCKS inbound.
-                    var success = false
-                    val connection = url.openConnection(Proxy.NO_PROXY) as HttpURLConnection
-                    connection.connectTimeout = timeout
-                    connection.readTimeout = timeout
-                    connection.instanceFollowRedirects = false
-                    connection.setRequestProperty("Connection", "close")
-                    try {
-                        val responseCode = connection.responseCode
-                        success = responseCode in 100..599
-                    } finally {
-                        connection.disconnect()
+                // Connect through the SOCKS5 proxy for both HEV TUN and Xray TUN modes.
+                // In Xray TUN mode the SimpleXray app is excluded from VPN routing, so the
+                // loopback connection to 127.0.0.1:socksPort bypasses the TUN interface and
+                // reaches Xray's SOCKS inbound directly, testing the full proxy chain.
+                val proxy =
+                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
+                Socket(proxy).use { socket ->
+                    socket.soTimeout = timeout
+                    socket.connect(InetSocketAddress(host, port), timeout)
+                    val (writer, reader) = if (isHttps) {
+                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+                        sslSocket.startHandshake()
+                        Pair(
+                            sslSocket.outputStream.bufferedWriter(),
+                            sslSocket.inputStream.bufferedReader()
+                        )
+                    } else {
+                        Pair(
+                            socket.getOutputStream().bufferedWriter(),
+                            socket.getInputStream().bufferedReader()
+                        )
                     }
+                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                    writer.flush()
+                    val firstLine = reader.readLine()
                     val latency = System.currentTimeMillis() - start
-                    if (success) {
+                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
                         _uiEvent.trySend(
                             MainViewUiEvent.ShowSnackbar(
-                                application.getString(R.string.connectivity_test_latency, latency.toInt())
+                                application.getString(
+                                    R.string.connectivity_test_latency,
+                                    latency.toInt()
+                                )
                             )
                         )
                     } else {
@@ -820,47 +831,6 @@ class MainViewModel(application: Application) :
                                 application.getString(R.string.connectivity_test_failed)
                             )
                         )
-                    }
-                } else {
-                    val proxy =
-                        Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
-                    Socket(proxy).use { socket ->
-                        socket.soTimeout = timeout
-                        socket.connect(InetSocketAddress(host, port), timeout)
-                        val (writer, reader) = if (isHttps) {
-                            val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                                .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                            sslSocket.startHandshake()
-                            Pair(
-                                sslSocket.outputStream.bufferedWriter(),
-                                sslSocket.inputStream.bufferedReader()
-                            )
-                        } else {
-                            Pair(
-                                socket.getOutputStream().bufferedWriter(),
-                                socket.getInputStream().bufferedReader()
-                            )
-                        }
-                        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                        writer.flush()
-                        val firstLine = reader.readLine()
-                        val latency = System.currentTimeMillis() - start
-                        if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(
-                                        R.string.connectivity_test_latency,
-                                        latency.toInt()
-                                    )
-                                )
-                            )
-                        } else {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(R.string.connectivity_test_failed)
-                                )
-                            )
-                        }
                     }
                 }
             } catch (e: Exception) {
