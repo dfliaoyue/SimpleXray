@@ -63,6 +63,9 @@ private const val TAG = "MainViewModel"
 /** Maximum time (ms) the temporary SOCKS5 inbound is allowed to stay alive. */
 private const val SOCKS_LIFETIME_MS = 3_000L
 
+/** Time (ms) to wait after adding the SOCKS5 inbound before Xray has fully bound the port. */
+private const val INBOUND_BIND_DELAY_MS = 300L
+
 sealed class MainViewUiEvent {
     data class ShowSnackbar(val message: String) : MainViewUiEvent()
     data class ShareLauncher(val intent: Intent) : MainViewUiEvent()
@@ -807,7 +810,7 @@ class MainViewModel(application: Application) :
                 val tag = "connectivity-test-temp"
                 // Pick a random high port (32768-60999) to avoid well-known port conflicts.
                 val testPort = run {
-                    val rng = java.util.Random()
+                    val rng = java.security.SecureRandom()
                     var port: Int? = null
                     repeat(20) {
                         val candidate = 32768 + rng.nextInt(28232)
@@ -833,7 +836,7 @@ class MainViewModel(application: Application) :
                     return@launch
                 }
                 // Give Xray a moment to bind the new inbound port.
-                kotlinx.coroutines.delay(300)
+                kotlinx.coroutines.delay(INBOUND_BIND_DELAY_MS)
                 try {
                     // Cap socket operations to SOCKS_LIFETIME_MS; withTimeout provides an
                     // outer coroutine-level guard for any suspending calls in the block.

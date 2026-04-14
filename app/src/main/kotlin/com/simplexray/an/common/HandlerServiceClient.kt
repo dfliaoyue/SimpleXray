@@ -39,7 +39,7 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
             val portRange = PortRange.newBuilder().setFrom(port).setTo(port).build()
             val portList = PortList.newBuilder().addRange(portRange).build()
             val listenAddr = IPOrDomain.newBuilder()
-                .setIp(ByteString.copyFrom(byteArrayOf(127, 0, 0, 1)))
+                .setIp(ByteString.copyFrom(byteArrayOf(127, 0, 0, 1))) // 127.0.0.1
                 .build()
             val receiverConfig = ReceiverConfig.newBuilder()
                 .setPortList(portList)
