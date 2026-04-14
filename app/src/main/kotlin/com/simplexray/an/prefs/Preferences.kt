@@ -194,7 +194,7 @@ class Preferences(context: Context) {
         }
 
     val tunnelMtu: Int
-        get() = 1500
+        get() = 8500
 
     val tunnelIpv4Address: String
         get() = "198.18.0.1"
