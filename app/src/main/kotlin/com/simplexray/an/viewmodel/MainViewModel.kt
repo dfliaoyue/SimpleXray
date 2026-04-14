@@ -800,8 +800,6 @@ class MainViewModel(application: Application) :
             val path = if (url.path.isNullOrEmpty()) "/" else url.path
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
-            val start = System.currentTimeMillis()
-
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
             if (useXrayTun) {
                 // The app is excluded from VPN routing via addDisallowedApplication so it
@@ -861,6 +859,7 @@ class MainViewModel(application: Application) :
                                     try {
                                         socket.use {
                                             it.soTimeout = socksTimeout
+                                            val start = System.currentTimeMillis()
                                             it.connect(InetSocketAddress.createUnresolved(host, port), socksTimeout)
                                             val (writer, reader) = if (isHttps) {
                                                 val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
@@ -916,6 +915,7 @@ class MainViewModel(application: Application) :
             try {
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
+                    val start = System.currentTimeMillis()
                     socket.connect(InetSocketAddress(host, port), timeout)
                     val (writer, reader) = if (isHttps) {
                         val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
