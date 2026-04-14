@@ -799,17 +799,13 @@ class MainViewModel(application: Application) :
                 // route the traffic through Xray's TUN inbound, which then proxies it
                 // transparently. No SOCKS inbound is needed, and no port is exposed.
                 val cm = application.getSystemService(ConnectivityManager::class.java)
-                val vpnNetwork = cm.allNetworks.firstOrNull { network ->
-                    val caps = cm.getNetworkCapabilities(network)
-                    caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                }
-                if (vpnNetwork == null) {
-                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                    return@launch
-                }
                 val socket = Socket()
                 var sslSocket: javax.net.ssl.SSLSocket? = null
                 try {
+                    val vpnNetwork = cm.allNetworks.firstOrNull { network ->
+                        val caps = cm.getNetworkCapabilities(network)
+                        caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    } ?: throw Exception("VPN network not found")
                     vpnNetwork.bindSocket(socket)
                     socket.soTimeout = timeout
                     socket.connect(InetSocketAddress(host, port), timeout)
