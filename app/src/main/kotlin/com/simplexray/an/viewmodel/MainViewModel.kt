@@ -20,6 +20,7 @@ import androidx.lifecycle.viewModelScope
 import com.simplexray.an.BuildConfig
 import com.simplexray.an.R
 import com.simplexray.an.common.CoreStatsClient
+import com.simplexray.an.common.HandlerServiceClient
 import com.simplexray.an.common.ROUTE_APP_LIST
 import com.simplexray.an.common.ROUTE_CONFIG_EDIT
 import com.simplexray.an.common.ThemeMode
@@ -48,7 +49,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -789,55 +789,88 @@ class MainViewModel(application: Application) :
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
+
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
             if (useXrayTun) {
-                // In Xray TUN mode the app is excluded from VPN routing via
-                // addDisallowedApplication (to prevent Xray's outbound from looping through
-                // the TUN).  As a result, the app's own sockets also bypass the TUN and go
-                // directly to the internet.  ConnectivityManager.getAllNetworks() filters out
-                // VPN networks for excluded UIDs, so vpnNetwork would always be null and
-                // Network.openConnection() would be unreliable even with a cached reference.
-                // We therefore perform a direct internet test without any VPN/SOCKS binding.
+                // The app is excluded from VPN routing via addDisallowedApplication so it
+                // cannot reach the TUN directly.  Instead, we ask Xray at runtime (via its
+                // HandlerService gRPC API) to create a temporary SOCKS5 inbound with random
+                // credentials, run the HTTP test through it, then remove the inbound.
+                val tag = "connectivity-test-temp"
+                val testPort = runCatching {
+                    java.net.ServerSocket(0).use { it.localPort }
+                }.getOrNull()
+                if (testPort == null) {
+                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
+                    return@launch
+                }
+                val testUser = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
+                val testPass = java.util.UUID.randomUUID().toString().replace("-", "")
+
+                val handlerClient = HandlerServiceClient.create(prefs.apiAddress, prefs.apiPort)
+                val added = handlerClient.addSocksInbound(tag, testPort, testUser, testPass)
+                if (!added) {
+                    handlerClient.close()
+                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
+                    return@launch
+                }
+                // Give Xray a moment to bind the new inbound port.
+                kotlinx.coroutines.delay(500)
                 try {
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = timeout
-                    conn.readTimeout = timeout
-                    conn.instanceFollowRedirects = false
+                    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", testPort))
+                    val prevAuth = java.net.Authenticator.getDefault()
+                    java.net.Authenticator.setDefault(object : java.net.Authenticator() {
+                        override fun getPasswordAuthentication() =
+                            java.net.PasswordAuthentication(testUser, testPass.toCharArray())
+                    })
                     try {
-                        val responseCode = conn.responseCode
-                        val latency = System.currentTimeMillis() - start
-                        if (responseCode in 100..599) {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(
-                                        R.string.connectivity_test_latency,
-                                        latency.toInt()
+                        Socket(proxy).use { socket ->
+                            socket.soTimeout = timeout
+                            socket.connect(InetSocketAddress.createUnresolved(host, port), timeout)
+                            val (writer, reader) = if (isHttps) {
+                                val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                                    .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+                                sslSocket.startHandshake()
+                                Pair(
+                                    sslSocket.outputStream.bufferedWriter(),
+                                    sslSocket.inputStream.bufferedReader()
+                                )
+                            } else {
+                                Pair(
+                                    socket.getOutputStream().bufferedWriter(),
+                                    socket.getInputStream().bufferedReader()
+                                )
+                            }
+                            writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                            writer.flush()
+                            val firstLine = reader.readLine()
+                            val latency = System.currentTimeMillis() - start
+                            if (firstLine != null && firstLine.startsWith("HTTP/")) {
+                                _uiEvent.trySend(
+                                    MainViewUiEvent.ShowSnackbar(
+                                        application.getString(R.string.connectivity_test_latency, latency.toInt())
                                     )
                                 )
-                            )
-                        } else {
-                            _uiEvent.trySend(
-                                MainViewUiEvent.ShowSnackbar(
-                                    application.getString(R.string.connectivity_test_failed)
-                                )
-                            )
+                            } else {
+                                _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
+                            }
                         }
+                    } catch (e: Exception) {
+                        _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
                     } finally {
-                        conn.disconnect()
+                        java.net.Authenticator.setDefault(prevAuth)
                     }
-                } catch (e: Exception) {
-                    _uiEvent.trySend(
-                        MainViewUiEvent.ShowSnackbar(
-                            application.getString(R.string.connectivity_test_failed)
-                        )
-                    )
+                } finally {
+                    handlerClient.removeInbound(tag)
+                    handlerClient.close()
                 }
                 return@launch
             }
+
+            // HEV TUN mode: connect through the user-configured SOCKS5 proxy.
+            val proxy =
+                Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
             try {
-                // HEV TUN mode: connect through the SOCKS5 proxy.
-                val proxy =
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
                     socket.connect(InetSocketAddress(host, port), timeout)
