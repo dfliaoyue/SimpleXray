@@ -14,7 +14,7 @@ object ConfigUtils {
             val inbounds = jsonObject.optJSONArray("inbounds") ?: return null
             for (i in 0 until inbounds.length()) {
                 val inbound = inbounds.optJSONObject(i) ?: continue
-                if (inbound.optString("type") == "tun") {
+                if (inbound.optString("protocol") == "tun") {
                     return inbound.optJSONObject("settings")?.optInt("MTU", -1)
                         ?.takeIf { it > 0 }
                 }
