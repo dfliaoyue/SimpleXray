@@ -43,6 +43,28 @@ object ConfigUtils {
         return formattedContent
     }
 
+    /**
+     * Inject a temporary SOCKS5 inbound bound exclusively to 127.0.0.1 at the given [port].
+     * This inbound is never written to the user's config file; it only exists in the runtime
+     * config passed to Xray, allowing the app to route its connectivity test through Xray even
+     * when the user has no SOCKS inbound in their own config.
+     */
+    @Throws(JSONException::class)
+    fun injectEphemeralSocks(configContent: String, port: Int): String {
+        val jsonObject = JSONObject(configContent)
+        val inbounds = jsonObject.optJSONArray("inbounds") ?: org.json.JSONArray()
+        val socksInbound = JSONObject().apply {
+            put("listen", "127.0.0.1")
+            put("port", port)
+            put("protocol", "socks")
+            put("settings", JSONObject().apply { put("auth", "noauth") })
+            put("tag", "ephemeral-socks")
+        }
+        inbounds.put(socksInbound)
+        jsonObject.put("inbounds", inbounds)
+        return jsonObject.toString(2)
+    }
+
     @Throws(JSONException::class)
     fun injectStatsService(prefs: Preferences, configContent: String): String {
         val jsonObject = JSONObject(configContent)

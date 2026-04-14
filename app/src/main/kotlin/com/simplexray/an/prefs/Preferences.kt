@@ -309,6 +309,15 @@ class Preferences(context: Context) {
             setValueInProvider(API_PORT, port.toString())
         }
 
+    var ephemeralSocksPort: Int
+        get() {
+            val value = getPrefData(EPHEMERAL_SOCKS_PORT).first
+            return value?.toIntOrNull() ?: 0
+        }
+        set(port) {
+            setValueInProvider(EPHEMERAL_SOCKS_PORT, port.toString())
+        }
+
     var bypassSelectedApps: Boolean
         get() = getBooleanPref(BYPASS_SELECTED_APPS, false)
         set(enable) {
@@ -349,6 +358,7 @@ class Preferences(context: Context) {
         const val GEOSITE_URL: String = "GeositeUrl"
         const val API_ADDRESS: String = "ApiAddress"
         const val API_PORT: String = "ApiPort"
+        const val EPHEMERAL_SOCKS_PORT: String = "EphemeralSocksPort"
         const val BYPASS_SELECTED_APPS: String = "BypassSelectedApps"
         const val THEME: String = "Theme"
         private const val TAG = "Preferences"

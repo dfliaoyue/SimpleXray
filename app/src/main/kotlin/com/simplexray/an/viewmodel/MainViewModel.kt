@@ -788,13 +788,26 @@ class MainViewModel(application: Application) :
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
+            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+            // In Xray TUN mode, use the ephemeral SOCKS inbound injected at startup
+            // (127.0.0.1 only, not exposed externally). For HEV TUN mode, use the
+            // user-configured SOCKS address/port.
+            val proxyAddress: String
+            val proxyPort: Int
+            if (useXrayTun) {
+                val ephPort = prefs.ephemeralSocksPort
+                if (ephPort <= 0) {
+                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
+                    return@launch
+                }
+                proxyAddress = "127.0.0.1"
+                proxyPort = ephPort
+            } else {
+                proxyAddress = prefs.socksAddress
+                proxyPort = prefs.socksPort
+            }
             try {
-                // Connect through the SOCKS5 proxy for both HEV TUN and Xray TUN modes.
-                // In Xray TUN mode the SimpleXray app is excluded from VPN routing, so the
-                // loopback connection to 127.0.0.1:socksPort bypasses the TUN interface and
-                // reaches Xray's SOCKS inbound directly, testing the full proxy chain.
-                val proxy =
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
+                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxyAddress, proxyPort))
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
                     socket.connect(InetSocketAddress(host, port), timeout)
