@@ -48,6 +48,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -782,52 +783,70 @@ class MainViewModel(application: Application) :
                 _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_invalid_url)))
                 return@launch
             }
-            val host = url.host
-            val port = if (url.port > 0) url.port else url.defaultPort
-            val path = if (url.path.isNullOrEmpty()) "/" else url.path
-            val isHttps = url.protocol == "https"
-            val proxy =
-                Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
+            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
             try {
-                Socket(proxy).use { socket ->
-                    socket.soTimeout = timeout
-                    socket.connect(InetSocketAddress(host, port), timeout)
-                    val (writer, reader) = if (isHttps) {
-                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                        sslSocket.startHandshake()
-                        Pair(
-                            sslSocket.outputStream.bufferedWriter(),
-                            sslSocket.inputStream.bufferedReader()
-                        )
-                    } else {
-                        Pair(
-                            socket.getOutputStream().bufferedWriter(),
-                            socket.getInputStream().bufferedReader()
-                        )
+                var success = false
+                if (useXrayTun) {
+                    // In Xray TUN mode, Xray handles the TUN interface natively and the
+                    // SimpleXray app itself is excluded from VPN routing. Use a direct
+                    // connection (no SOCKS proxy) since there may be no SOCKS inbound.
+                    val connection = url.openConnection(Proxy.NO_PROXY) as HttpURLConnection
+                    connection.connectTimeout = timeout
+                    connection.readTimeout = timeout
+                    connection.instanceFollowRedirects = false
+                    connection.setRequestProperty("Connection", "close")
+                    try {
+                        val responseCode = connection.responseCode
+                        success = responseCode in 100..599
+                    } finally {
+                        connection.disconnect()
                     }
-                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                    writer.flush()
-                    val firstLine = reader.readLine()
-                    val latency = System.currentTimeMillis() - start
-                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(
-                                    R.string.connectivity_test_latency,
-                                    latency.toInt()
-                                )
+                } else {
+                    // In HEV TUN mode or SOCKS-only mode, connect through the SOCKS5 proxy.
+                    // Manual SOCKS5 handshake is used to support username/password authentication.
+                    val host = url.host
+                    val port = if (url.port > 0) url.port else url.defaultPort
+                    val path = if (url.path.isNullOrEmpty()) "/" else url.path
+                    val isHttps = url.protocol == "https"
+                    connectViaSocks5(
+                        prefs.socksAddress, prefs.socksPort, host, port,
+                        prefs.socksUsername, prefs.socksPassword, timeout
+                    ).use { socket ->
+                        val (writer, reader) = if (isHttps) {
+                            val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                                .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+                            sslSocket.startHandshake()
+                            Pair(
+                                sslSocket.outputStream.bufferedWriter(),
+                                sslSocket.inputStream.bufferedReader()
                             )
-                        )
-                    } else {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(R.string.connectivity_test_failed)
+                        } else {
+                            Pair(
+                                socket.getOutputStream().bufferedWriter(),
+                                socket.getInputStream().bufferedReader()
                             )
-                        )
+                        }
+                        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                        writer.flush()
+                        val firstLine = reader.readLine()
+                        success = firstLine != null && firstLine.startsWith("HTTP/")
                     }
+                }
+                val latency = System.currentTimeMillis() - start
+                if (success) {
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(
+                            application.getString(R.string.connectivity_test_latency, latency.toInt())
+                        )
+                    )
+                } else {
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(
+                            application.getString(R.string.connectivity_test_failed)
+                        )
+                    )
                 }
             } catch (e: Exception) {
                 _uiEvent.trySend(
@@ -836,6 +855,106 @@ class MainViewModel(application: Application) :
                     )
                 )
             }
+        }
+    }
+
+    /**
+     * Opens a SOCKS5 connection to [targetHost]:[targetPort] via the SOCKS5 proxy at
+     * [socksHost]:[socksPort], performing username/password authentication when
+     * [username] and [password] are non-empty (RFC 1929).
+     *
+     * Returns a [Socket] that is already connected through the proxy to the target.
+     * The caller is responsible for closing it.
+     */
+    @Throws(IOException::class)
+    private fun connectViaSocks5(
+        socksHost: String, socksPort: Int,
+        targetHost: String, targetPort: Int,
+        username: String, password: String,
+        timeout: Int
+    ): Socket {
+        val socket = Socket()
+        try {
+            socket.soTimeout = timeout
+            socket.connect(InetSocketAddress(socksHost, socksPort), timeout)
+            val input = socket.getInputStream()
+            val output = socket.getOutputStream()
+            val hasCredentials = username.isNotEmpty() && password.isNotEmpty()
+
+            // SOCKS5 greeting: advertise supported authentication methods
+            if (hasCredentials) {
+                output.write(byteArrayOf(0x05, 0x02, 0x00, 0x02)) // no-auth + user/pass
+            } else {
+                output.write(byteArrayOf(0x05, 0x01, 0x00))        // no-auth only
+            }
+            output.flush()
+
+            // Server selects a method
+            val ver = input.read()
+            val method = input.read()
+            if (ver != 5) throw IOException("SOCKS5: unexpected server version $ver")
+
+            when (method) {
+                0x00 -> { /* No authentication required */ }
+                0x02 -> {
+                    // Username/password sub-negotiation (RFC 1929)
+                    if (!hasCredentials) throw IOException("SOCKS5: server requires credentials")
+                    val userBytes = username.toByteArray(Charsets.UTF_8)
+                    val passBytes = password.toByteArray(Charsets.UTF_8)
+                    val authMsg = ByteArray(3 + userBytes.size + passBytes.size)
+                    var idx = 0
+                    authMsg[idx++] = 0x01  // sub-negotiation version
+                    authMsg[idx++] = userBytes.size.toByte()
+                    userBytes.copyInto(authMsg, idx); idx += userBytes.size
+                    authMsg[idx++] = passBytes.size.toByte()
+                    passBytes.copyInto(authMsg, idx)
+                    output.write(authMsg)
+                    output.flush()
+                    input.read()  // sub-negotiation version in response
+                    val status = input.read()
+                    if (status != 0x00) throw IOException("SOCKS5: authentication failed")
+                }
+                0xFF -> throw IOException("SOCKS5: no acceptable authentication method")
+                else -> throw IOException("SOCKS5: unexpected method $method")
+            }
+
+            // SOCKS5 CONNECT request using domain-name address type (ATYP=0x03)
+            val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
+            val req = ByteArray(7 + hostBytes.size)
+            var idx = 0
+            req[idx++] = 0x05  // VER
+            req[idx++] = 0x01  // CMD: CONNECT
+            req[idx++] = 0x00  // RSV
+            req[idx++] = 0x03  // ATYP: domain name
+            req[idx++] = hostBytes.size.toByte()
+            hostBytes.copyInto(req, idx); idx += hostBytes.size
+            req[idx++] = ((targetPort shr 8) and 0xFF).toByte()
+            req[idx] = (targetPort and 0xFF).toByte()
+            output.write(req)
+            output.flush()
+
+            // Read CONNECT response
+            input.read()  // VER
+            val rep = input.read()
+            input.read()  // RSV
+            val atyp = input.read()
+            // Skip the bound address
+            val skipBytes = when (atyp) {
+                0x01 -> 4   // IPv4
+                0x03 -> input.read()  // domain: length byte followed by that many bytes
+                0x04 -> 16  // IPv6
+                else -> 0
+            }
+            val skipBuf = ByteArray(skipBytes)
+            var read = 0
+            while (read < skipBytes) read += input.read(skipBuf, read, skipBytes - read)
+            input.read(); input.read()  // BND.PORT
+
+            if (rep != 0x00) throw IOException("SOCKS5: CONNECT failed with reply code $rep")
+            return socket
+        } catch (e: Exception) {
+            socket.close()
+            throw e
         }
     }
 
