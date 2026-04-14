@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -789,25 +791,76 @@ class MainViewModel(application: Application) :
             val timeout = prefs.connectivityTestTimeout
             val start = System.currentTimeMillis()
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
-            // In Xray TUN mode, use the ephemeral SOCKS inbound injected at startup
-            // (127.0.0.1 only, not exposed externally). For HEV TUN mode, use the
-            // user-configured SOCKS address/port.
-            val proxyAddress: String
-            val proxyPort: Int
             if (useXrayTun) {
-                val ephPort = prefs.ephemeralSocksPort
-                if (ephPort <= 0) {
+                // In Xray TUN mode the app is excluded from VPN routing via
+                // addDisallowedApplication, so its sockets normally bypass the TUN.
+                // By explicitly binding the test socket to the VPN network we override
+                // that UID-based routing rule (fwmark rules take higher priority) and
+                // route the traffic through Xray's TUN inbound, which then proxies it
+                // transparently. No SOCKS inbound is needed, and no port is exposed.
+                val cm = application.getSystemService(ConnectivityManager::class.java)
+                val vpnNetwork = cm.allNetworks.firstOrNull { network ->
+                    val caps = cm.getNetworkCapabilities(network)
+                    caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                }
+                if (vpnNetwork == null) {
                     _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
                     return@launch
                 }
-                proxyAddress = "127.0.0.1"
-                proxyPort = ephPort
-            } else {
-                proxyAddress = prefs.socksAddress
-                proxyPort = prefs.socksPort
+                val socket = Socket()
+                try {
+                    vpnNetwork.bindSocket(socket)
+                    socket.soTimeout = timeout
+                    socket.connect(InetSocketAddress(host, port), timeout)
+                    val (writer, reader) = if (isHttps) {
+                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+                        sslSocket.startHandshake()
+                        Pair(
+                            sslSocket.outputStream.bufferedWriter(),
+                            sslSocket.inputStream.bufferedReader()
+                        )
+                    } else {
+                        Pair(
+                            socket.getOutputStream().bufferedWriter(),
+                            socket.getInputStream().bufferedReader()
+                        )
+                    }
+                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                    writer.flush()
+                    val firstLine = reader.readLine()
+                    val latency = System.currentTimeMillis() - start
+                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
+                        _uiEvent.trySend(
+                            MainViewUiEvent.ShowSnackbar(
+                                application.getString(
+                                    R.string.connectivity_test_latency,
+                                    latency.toInt()
+                                )
+                            )
+                        )
+                    } else {
+                        _uiEvent.trySend(
+                            MainViewUiEvent.ShowSnackbar(
+                                application.getString(R.string.connectivity_test_failed)
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(
+                            application.getString(R.string.connectivity_test_failed)
+                        )
+                    )
+                } finally {
+                    socket.close()
+                }
+                return@launch
             }
             try {
-                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxyAddress, proxyPort))
+                // Connect through the SOCKS5 proxy for HEV TUN mode.
+                val proxy =
+                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
                 Socket(proxy).use { socket ->
                     socket.soTimeout = timeout
                     socket.connect(InetSocketAddress(host, port), timeout)

@@ -215,27 +215,8 @@ class TProxyService : VpnService() {
             prefs.apiAddress = "127.$octet2.$octet3.$octet4"
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
-            val statsInjectedContent = ConfigUtils.injectStatsService(prefs, configContent)
+            val injectedConfigContent = ConfigUtils.injectStatsService(prefs, configContent)
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
-
-            // In Xray TUN mode, inject a temporary SOCKS5 inbound bound only to 127.0.0.1.
-            // This lets the app test connectivity even when the user's config has no SOCKS
-            // inbound (the user may have removed it to avoid exposing a proxy port).
-            val injectedConfigContent = if (useXrayTun) {
-                val usedPorts = extractPortsFromJson(configContent) + apiPort
-                val ephPort = findAvailablePort(usedPorts)
-                if (ephPort != null) {
-                    prefs.ephemeralSocksPort = ephPort
-                    Log.d(TAG, "Injected ephemeral SOCKS port: $ephPort")
-                    ConfigUtils.injectEphemeralSocks(statsInjectedContent, ephPort)
-                } else {
-                    Log.w(TAG, "Could not find available port for ephemeral SOCKS")
-                    prefs.ephemeralSocksPort = 0
-                    statsInjectedContent
-                }
-            } else {
-                statsInjectedContent
-            }
 
             val reader: BufferedReader
 
@@ -454,7 +435,6 @@ class TProxyService : VpnService() {
             if (!prefs.useXrayTun || prefs.disableVpn) {
                 TProxyStopService()
             }
-            prefs.ephemeralSocksPort = 0
         }
         exit()
     }
