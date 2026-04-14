@@ -62,7 +62,7 @@ object ConfigUtils {
         }
         inbounds.put(socksInbound)
         jsonObject.put("inbounds", inbounds)
-        return jsonObject.toString(2)
+        return jsonObject.toString(2).replace("\\/", "/")
     }
 
     @Throws(JSONException::class)
