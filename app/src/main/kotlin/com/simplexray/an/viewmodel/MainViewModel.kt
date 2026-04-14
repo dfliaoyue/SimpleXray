@@ -806,10 +806,14 @@ class MainViewModel(application: Application) :
             if (useXrayTun) {
                 // The app is excluded from VPN routing via addDisallowedApplication so it
                 // cannot reach the TUN directly.  Instead, we ask Xray at runtime (via its
-                // HandlerService gRPC API) to create a temporary NO_AUTH SOCKS5 inbound
-                // bound to 127.0.0.1 with a random high port, run the HTTP test through it,
-                // then remove the inbound.  The inbound lifetime is capped at SOCKS_LIFETIME_MS.
+                // HandlerService gRPC API) to create a temporary SOCKS5 inbound bound to
+                // 127.0.0.1 with a random high port, run the HTTP test through it, then
+                // remove the inbound.  The inbound lifetime is capped at SOCKS_LIFETIME_MS.
                 val tag = "connectivity-test-temp"
+                // Use the GUI-configured SOCKS5 credentials.  The globalSocksAuthenticator
+                // already holds these so no temporary authenticator override is needed.
+                val testUser = prefs.socksUsername
+                val testPass = prefs.socksPassword
                 // Pick a random high port (32768-60999) to avoid well-known port conflicts.
                 val testPort = run {
                     val rng = java.security.SecureRandom()
@@ -829,7 +833,7 @@ class MainViewModel(application: Application) :
                 }
 
                 val handlerClient = HandlerServiceClient.create(prefs.apiAddress, prefs.apiPort)
-                val added = handlerClient.addSocksInbound(tag, testPort)
+                val added = handlerClient.addSocksInbound(tag, testPort, testUser, testPass)
                 if (!added) {
                     handlerClient.close()
                     _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))

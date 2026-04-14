@@ -11,6 +11,7 @@ import com.xray.app.proxyman.command.HandlerServiceGrpc
 import com.xray.app.proxyman.command.RemoveInboundRequest
 import com.xray.common.net.IPOrDomain
 import com.xray.core.InboundHandlerConfig
+import com.xray.proxy.socks.Account
 import com.xray.proxy.socks.AuthType
 import com.xray.proxy.socks.ServerConfig
 import io.grpc.ManagedChannel
@@ -28,12 +29,16 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
         .withDeadlineAfter(5, TimeUnit.SECONDS)
 
     /**
-     * Ask Xray to create a SOCKS5 inbound on [port], bound to 127.0.0.1, with
-     * NO_AUTH so that Java's built-in SOCKS5 socket can use it without
-     * authentication overhead.  The short, random port and 5-second lifetime
-     * keep the exposure window minimal.  Returns true if the RPC call succeeded.
+     * Ask Xray to create a SOCKS5 inbound on [port], bound to 127.0.0.1.
+     * Uses PASSWORD auth with [username]/[password] when both are non-empty,
+     * otherwise falls back to NO_AUTH.  Returns true if the RPC call succeeded.
      */
-    suspend fun addSocksInbound(tag: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+    suspend fun addSocksInbound(
+        tag: String,
+        port: Int,
+        username: String,
+        password: String,
+    ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val portRange = PortRange.newBuilder().setFrom(port).setTo(port).build()
             val portList = PortList.newBuilder().addRange(portRange).build()
@@ -45,9 +50,20 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
                 .setListen(listenAddr)
                 .build()
 
-            val socksConfig = ServerConfig.newBuilder()
-                .setAuthType(AuthType.NO_AUTH)
-                .build()
+            val socksConfig = if (username.isNotEmpty() && password.isNotEmpty()) {
+                val account = Account.newBuilder()
+                    .setUsername(username)
+                    .setPassword(password)
+                    .build()
+                ServerConfig.newBuilder()
+                    .setAuthType(AuthType.PASSWORD)
+                    .addAccounts(account)
+                    .build()
+            } else {
+                ServerConfig.newBuilder()
+                    .setAuthType(AuthType.NO_AUTH)
+                    .build()
+            }
 
             val inboundConfig = InboundHandlerConfig.newBuilder()
                 .setTag(tag)
