@@ -1,12 +1,14 @@
 package com.simplexray.an.common
 
 import com.google.protobuf.Any
+import com.google.protobuf.ByteString
 import com.xray.app.proxyman.PortList
 import com.xray.app.proxyman.PortRange
 import com.xray.app.proxyman.ReceiverConfig
 import com.xray.app.proxyman.command.AddInboundRequest
 import com.xray.app.proxyman.command.HandlerServiceGrpc
 import com.xray.app.proxyman.command.RemoveInboundRequest
+import com.xray.common.net.IPOrDomain
 import com.xray.core.InboundHandlerConfig
 import com.xray.proxy.socks.Account
 import com.xray.proxy.socks.AuthType
@@ -24,8 +26,8 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
         .withDeadlineAfter(5, TimeUnit.SECONDS)
 
     /**
-     * Ask Xray to create a SOCKS5 inbound on [port] with password authentication.
-     * Returns true if the RPC call succeeded.
+     * Ask Xray to create a SOCKS5 inbound on [port], bound to 127.0.0.1, with
+     * password authentication.  Returns true if the RPC call succeeded.
      */
     suspend fun addSocksInbound(
         tag: String,
@@ -36,7 +38,13 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
         runCatching {
             val portRange = PortRange.newBuilder().setFrom(port).setTo(port).build()
             val portList = PortList.newBuilder().addRange(portRange).build()
-            val receiverConfig = ReceiverConfig.newBuilder().setPortRange(portList).build()
+            val listenAddr = IPOrDomain.newBuilder()
+                .setIp(ByteString.copyFrom(byteArrayOf(127, 0, 0, 1)))
+                .build()
+            val receiverConfig = ReceiverConfig.newBuilder()
+                .setPortList(portList)
+                .setListen(listenAddr)
+                .build()
 
             val account = Account.newBuilder()
                 .setUsername(username)

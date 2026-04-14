@@ -5,6 +5,8 @@ package xray.app.proxyman;
 option java_package = "com.xray.app.proxyman";
 option java_multiple_files = true;
 
+import "net_address.proto";
+
 // Minimal subset of xray-core/app/proxyman/config.proto.
 // Field numbers match xray-core exactly so that serialised bytes are compatible.
 
@@ -18,5 +20,6 @@ message PortList {
 }
 
 message ReceiverConfig {
-    PortList port_range = 1;
+    PortList port_list = 1;
+    xray.common.net.IPOrDomain listen = 2;
 }
