@@ -61,10 +61,13 @@ import kotlin.coroutines.cancellation.CancellationException
 private const val TAG = "MainViewModel"
 
 /** Maximum time (ms) the temporary SOCKS5 inbound is allowed to stay alive. */
-private const val SOCKS_LIFETIME_MS = 3_000L
+private const val SOCKS_LIFETIME_MS = 5_000L
 
-/** Time (ms) to wait after adding the SOCKS5 inbound before Xray has fully bound the port. */
+/** Time (ms) to wait between connection attempts to the newly added SOCKS5 inbound. */
 private const val INBOUND_BIND_DELAY_MS = 300L
+
+/** Number of times to retry connecting to the inbound before giving up. */
+private const val INBOUND_BIND_RETRIES = 5
 
 sealed class MainViewUiEvent {
     data class ShowSnackbar(val message: String) : MainViewUiEvent()
@@ -803,10 +806,9 @@ class MainViewModel(application: Application) :
             if (useXrayTun) {
                 // The app is excluded from VPN routing via addDisallowedApplication so it
                 // cannot reach the TUN directly.  Instead, we ask Xray at runtime (via its
-                // HandlerService gRPC API) to create a temporary SOCKS5 inbound bound to
-                // 127.0.0.1 with random credentials, run the HTTP test through it, then
-                // remove the inbound.  The inbound lifetime is capped at SOCKS_LIFETIME_MS
-                // so the port is never exposed for more than a few seconds.
+                // HandlerService gRPC API) to create a temporary NO_AUTH SOCKS5 inbound
+                // bound to 127.0.0.1 with a random high port, run the HTTP test through it,
+                // then remove the inbound.  The inbound lifetime is capped at SOCKS_LIFETIME_MS.
                 val tag = "connectivity-test-temp"
                 // Pick a random high port (32768-60999) to avoid well-known port conflicts.
                 val testPort = run {
@@ -825,68 +827,74 @@ class MainViewModel(application: Application) :
                     _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
                     return@launch
                 }
-                val testUser = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
-                val testPass = java.util.UUID.randomUUID().toString().replace("-", "")
 
                 val handlerClient = HandlerServiceClient.create(prefs.apiAddress, prefs.apiPort)
-                val added = handlerClient.addSocksInbound(tag, testPort, testUser, testPass)
+                val added = handlerClient.addSocksInbound(tag, testPort)
                 if (!added) {
                     handlerClient.close()
                     _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
                     return@launch
                 }
-                // Give Xray a moment to bind the new inbound port.
-                kotlinx.coroutines.delay(INBOUND_BIND_DELAY_MS)
                 try {
                     // Cap socket operations to SOCKS_LIFETIME_MS; withTimeout provides an
                     // outer coroutine-level guard for any suspending calls in the block.
                     val socksTimeout = SOCKS_LIFETIME_MS.toInt()
                     val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", testPort))
-                    val tempAuth = object : java.net.Authenticator() {
-                        override fun getPasswordAuthentication() =
-                            java.net.PasswordAuthentication(testUser, testPass.toCharArray())
-                    }
-                    java.net.Authenticator.setDefault(tempAuth)
                     try {
                         withTimeout(SOCKS_LIFETIME_MS) {
                             withContext(Dispatchers.IO) {
-                                Socket(proxy).use { socket ->
-                                    socket.soTimeout = socksTimeout
-                                    socket.connect(InetSocketAddress.createUnresolved(host, port), socksTimeout)
-                                    val (writer, reader) = if (isHttps) {
-                                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                                        sslSocket.startHandshake()
-                                        Pair(
-                                            sslSocket.outputStream.bufferedWriter(),
-                                            sslSocket.inputStream.bufferedReader()
-                                        )
-                                    } else {
-                                        Pair(
-                                            socket.getOutputStream().bufferedWriter(),
-                                            socket.getInputStream().bufferedReader()
-                                        )
+                                // Retry connecting to the inbound: xray may need a moment
+                                // to bind the port after AddInbound returns.
+                                var lastException: Exception? = null
+                                for (attempt in 1..INBOUND_BIND_RETRIES) {
+                                    Thread.sleep(INBOUND_BIND_DELAY_MS)
+                                    val socket = runCatching { Socket(proxy) }.getOrNull()
+                                    if (socket == null) continue
+                                    lastException = null
+                                    try {
+                                        socket.use {
+                                            it.soTimeout = socksTimeout
+                                            it.connect(InetSocketAddress.createUnresolved(host, port), socksTimeout)
+                                            val (writer, reader) = if (isHttps) {
+                                                val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                                                    .createSocket(it, host, port, true) as javax.net.ssl.SSLSocket
+                                                sslSocket.startHandshake()
+                                                Pair(
+                                                    sslSocket.outputStream.bufferedWriter(),
+                                                    sslSocket.inputStream.bufferedReader()
+                                                )
+                                            } else {
+                                                Pair(
+                                                    it.getOutputStream().bufferedWriter(),
+                                                    it.getInputStream().bufferedReader()
+                                                )
+                                            }
+                                            writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                                            writer.flush()
+                                            val firstLine = reader.readLine()
+                                            val latency = System.currentTimeMillis() - start
+                                            if (firstLine != null && firstLine.startsWith("HTTP/")) {
+                                                _uiEvent.trySend(
+                                                    MainViewUiEvent.ShowSnackbar(
+                                                        application.getString(R.string.connectivity_test_latency, latency.toInt())
+                                                    )
+                                                )
+                                            } else {
+                                                _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
+                                            }
+                                        }
+                                        return@withContext
+                                    } catch (e: Exception) {
+                                        lastException = e
                                     }
-                                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                                    writer.flush()
-                                    val firstLine = reader.readLine()
-                                    val latency = System.currentTimeMillis() - start
-                                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                                        _uiEvent.trySend(
-                                            MainViewUiEvent.ShowSnackbar(
-                                                application.getString(R.string.connectivity_test_latency, latency.toInt())
-                                            )
-                                        )
-                                    } else {
-                                        _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                                    }
+                                }
+                                if (lastException != null) {
+                                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
                                 }
                             }
                         }
                     } catch (e: Exception) {
                         _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                    } finally {
-                        java.net.Authenticator.setDefault(globalSocksAuthenticator)
                     }
                 } finally {
                     handlerClient.removeInbound(tag)

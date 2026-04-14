@@ -1,5 +1,6 @@
 package com.simplexray.an.common
 
+import android.util.Log
 import com.google.protobuf.Any
 import com.google.protobuf.ByteString
 import com.xray.app.proxyman.PortList
@@ -10,7 +11,6 @@ import com.xray.app.proxyman.command.HandlerServiceGrpc
 import com.xray.app.proxyman.command.RemoveInboundRequest
 import com.xray.common.net.IPOrDomain
 import com.xray.core.InboundHandlerConfig
-import com.xray.proxy.socks.Account
 import com.xray.proxy.socks.AuthType
 import com.xray.proxy.socks.ServerConfig
 import io.grpc.ManagedChannel
@@ -20,6 +20,8 @@ import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
+private const val TAG = "HandlerServiceClient"
+
 class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
 
     private val stub = HandlerServiceGrpc.newBlockingStub(channel)
@@ -27,14 +29,11 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
 
     /**
      * Ask Xray to create a SOCKS5 inbound on [port], bound to 127.0.0.1, with
-     * password authentication.  Returns true if the RPC call succeeded.
+     * NO_AUTH so that Java's built-in SOCKS5 socket can use it without
+     * authentication overhead.  The short, random port and 3-second lifetime
+     * keep the exposure window minimal.  Returns true if the RPC call succeeded.
      */
-    suspend fun addSocksInbound(
-        tag: String,
-        port: Int,
-        username: String,
-        password: String,
-    ): Boolean = withContext(Dispatchers.IO) {
+    suspend fun addSocksInbound(tag: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val portRange = PortRange.newBuilder().setFrom(port).setTo(port).build()
             val portList = PortList.newBuilder().addRange(portRange).build()
@@ -46,13 +45,8 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
                 .setListen(listenAddr)
                 .build()
 
-            val account = Account.newBuilder()
-                .setUsername(username)
-                .setPassword(password)
-                .build()
             val socksConfig = ServerConfig.newBuilder()
-                .setAuthType(AuthType.PASSWORD)
-                .addAccounts(account)
+                .setAuthType(AuthType.NO_AUTH)
                 .build()
 
             val inboundConfig = InboundHandlerConfig.newBuilder()
@@ -63,7 +57,10 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
 
             stub.addInbound(AddInboundRequest.newBuilder().setInbound(inboundConfig).build())
             true
-        }.getOrElse { false }
+        }.getOrElse { e ->
+            Log.e(TAG, "addSocksInbound failed (tag=$tag, port=$port)", e)
+            false
+        }
     }
 
     /** Ask Xray to remove the inbound with the given [tag]. Returns true on success. */
@@ -71,7 +68,10 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
         runCatching {
             stub.removeInbound(RemoveInboundRequest.newBuilder().setTag(tag).build())
             true
-        }.getOrElse { false }
+        }.getOrElse { e ->
+            Log.e(TAG, "removeInbound failed (tag=$tag)", e)
+            false
+        }
     }
 
     override fun close() {
