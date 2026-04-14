@@ -847,8 +847,11 @@ class MainViewModel(application: Application) :
                                 // to bind the port after AddInbound returns.
                                 var lastException: Exception? = null
                                 for (attempt in 1..INBOUND_BIND_RETRIES) {
-                                    Thread.sleep(INBOUND_BIND_DELAY_MS)
-                                    val socket = runCatching { Socket(proxy) }.getOrNull()
+                                    kotlinx.coroutines.delay(INBOUND_BIND_DELAY_MS)
+                                    val socket = runCatching { Socket(proxy) }.getOrElse { e ->
+                                        lastException = e as? Exception ?: RuntimeException(e)
+                                        null
+                                    }
                                     if (socket == null) continue
                                     lastException = null
                                     try {

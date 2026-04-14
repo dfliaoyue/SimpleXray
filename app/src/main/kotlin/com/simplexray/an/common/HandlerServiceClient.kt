@@ -30,7 +30,7 @@ class HandlerServiceClient(private val channel: ManagedChannel) : Closeable {
     /**
      * Ask Xray to create a SOCKS5 inbound on [port], bound to 127.0.0.1, with
      * NO_AUTH so that Java's built-in SOCKS5 socket can use it without
-     * authentication overhead.  The short, random port and 3-second lifetime
+     * authentication overhead.  The short, random port and 5-second lifetime
      * keep the exposure window minimal.  Returns true if the RPC call succeeded.
      */
     suspend fun addSocksInbound(tag: String, port: Int): Boolean = withContext(Dispatchers.IO) {
