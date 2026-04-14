@@ -50,6 +50,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -794,56 +795,42 @@ class MainViewModel(application: Application) :
             if (useXrayTun) {
                 // In Xray TUN mode the app is excluded from VPN routing via
                 // addDisallowedApplication, so its sockets normally bypass the TUN.
-                // By explicitly binding the test socket to the VPN network we override
-                // that UID-based routing rule (fwmark rules take higher priority) and
-                // route the traffic through Xray's TUN inbound, which then proxies it
-                // transparently. No SOCKS inbound is needed, and no port is exposed.
+                // Network.openConnection() binds both DNS resolution and the TCP
+                // connection to the VPN network, so traffic is routed through
+                // Xray's TUN inbound (including FakeDNS support) without needing
+                // a SOCKS inbound or manual socket manipulation.
                 val cm = application.getSystemService(ConnectivityManager::class.java)
-                val socket = Socket()
-                var sslSocket: javax.net.ssl.SSLSocket? = null
                 try {
                     val vpnNetwork = cm.allNetworks.firstOrNull { network ->
                         val caps = cm.getNetworkCapabilities(network)
                         caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                     } ?: throw Exception("VPN network not found")
-                    vpnNetwork.bindSocket(socket)
-                    socket.soTimeout = timeout
-                    socket.connect(InetSocketAddress(host, port), timeout)
-                    val (writer, reader) = if (isHttps) {
-                        val ssl = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                        ssl.soTimeout = timeout
-                        ssl.startHandshake()
-                        sslSocket = ssl
-                        Pair(
-                            ssl.outputStream.bufferedWriter(),
-                            ssl.inputStream.bufferedReader()
-                        )
-                    } else {
-                        Pair(
-                            socket.getOutputStream().bufferedWriter(),
-                            socket.getInputStream().bufferedReader()
-                        )
-                    }
-                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                    writer.flush()
-                    val firstLine = reader.readLine()
-                    val latency = System.currentTimeMillis() - start
-                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(
-                                    R.string.connectivity_test_latency,
-                                    latency.toInt()
+                    val conn = vpnNetwork.openConnection(url) as HttpURLConnection
+                    conn.connectTimeout = timeout
+                    conn.readTimeout = timeout
+                    conn.instanceFollowRedirects = false
+                    try {
+                        conn.connect()
+                        val responseCode = conn.responseCode
+                        val latency = System.currentTimeMillis() - start
+                        if (responseCode > 0) {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(
+                                        R.string.connectivity_test_latency,
+                                        latency.toInt()
+                                    )
                                 )
                             )
-                        )
-                    } else {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(R.string.connectivity_test_failed)
+                        } else {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(R.string.connectivity_test_failed)
+                                )
                             )
-                        )
+                        }
+                    } finally {
+                        conn.disconnect()
                     }
                 } catch (e: Exception) {
                     _uiEvent.trySend(
@@ -851,9 +838,6 @@ class MainViewModel(application: Application) :
                             application.getString(R.string.connectivity_test_failed)
                         )
                     )
-                } finally {
-                    sslSocket?.close()
-                    socket.close()
                 }
                 return@launch
             }
