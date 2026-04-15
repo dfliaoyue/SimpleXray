@@ -70,6 +70,12 @@ private const val INBOUND_BIND_DELAY_MS = 300L
 /** Number of times to retry connecting to the inbound before giving up. */
 private const val INBOUND_BIND_RETRIES = 5
 
+/** Inclusive lower bound of the random ephemeral port range used for temporary inbounds. */
+private const val EPHEMERAL_PORT_RANGE_START = 32768
+
+/** Number of candidate ports in the random ephemeral range (32768–60999 inclusive). */
+private const val EPHEMERAL_PORT_RANGE_SIZE = 60999 - EPHEMERAL_PORT_RANGE_START + 1
+
 sealed class MainViewUiEvent {
     data class ShowSnackbar(val message: String) : MainViewUiEvent()
     data class ShareLauncher(val intent: Intent) : MainViewUiEvent()
@@ -848,7 +854,7 @@ class MainViewModel(application: Application) :
                     val rng = java.security.SecureRandom()
                     var port: Int? = null
                     repeat(20) {
-                        val candidate = 32768 + rng.nextInt(28232)
+                        val candidate = EPHEMERAL_PORT_RANGE_START + rng.nextInt(EPHEMERAL_PORT_RANGE_SIZE)
                         if (runCatching { java.net.ServerSocket(candidate).close() }.isSuccess) {
                             port = candidate
                             return@repeat
@@ -1103,8 +1109,9 @@ class MainViewModel(application: Application) :
      * so that large rule-file downloads on slow connections complete successfully.
      *
      * A dedicated [java.net.Authenticator] is installed for the duration of the call and
-     * [globalSocksAuthenticator] is restored afterwards.  This authenticator is purposely
-     * isolated from [globalSocksAuthenticator] and the user-visible SOCKS credentials.
+     * [globalSocksAuthenticator] is restored unconditionally in the `finally` block.  This
+     * authenticator is purposely isolated from [globalSocksAuthenticator] and the user-visible
+     * SOCKS credentials.
      *
      * Used exclusively in Xray TUN mode so the app can reach the internet for its own network
      * tasks (rule-file downloads, update checks) while still routing through the proxy chain.
@@ -1123,7 +1130,7 @@ class MainViewModel(application: Application) :
         val port = run {
             var p: Int? = null
             repeat(20) {
-                val candidate = 32768 + rng.nextInt(28232)
+                val candidate = EPHEMERAL_PORT_RANGE_START + rng.nextInt(EPHEMERAL_PORT_RANGE_SIZE)
                 if (runCatching { java.net.ServerSocket(candidate).close() }.isSuccess) {
                     p = candidate
                     return@repeat
@@ -1140,12 +1147,11 @@ class MainViewModel(application: Application) :
         }
 
         // Install a per-session authenticator for these random credentials.
-        // The previous authenticator (globalSocksAuthenticator) is restored in the finally block.
+        // globalSocksAuthenticator is restored unconditionally in the finally block.
         val tempAuth = object : java.net.Authenticator() {
             override fun getPasswordAuthentication() =
                 java.net.PasswordAuthentication(randomUser, randomPass.toCharArray())
         }
-        val prevAuth = java.net.Authenticator.getDefault()
         java.net.Authenticator.setDefault(tempAuth)
         try {
             // Wait for Xray to bind the port before handing out the client.
@@ -1178,7 +1184,7 @@ class MainViewModel(application: Application) :
                 .build()
             block(client)
         } finally {
-            java.net.Authenticator.setDefault(prevAuth)
+            java.net.Authenticator.setDefault(globalSocksAuthenticator)
             handlerClient.removeInbound(tag)
             handlerClient.close()
         }
