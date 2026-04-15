@@ -25,6 +25,7 @@ import com.simplexray.an.R
 import com.simplexray.an.activity.MainActivity
 import com.simplexray.an.common.ConfigUtils
 import com.simplexray.an.common.ConfigUtils.extractPortsFromJson
+import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
@@ -209,7 +210,19 @@ class TProxyService : VpnService() {
             val selectedConfigPath = prefs.selectedConfigPath ?: return
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
-            val apiPort = findAvailablePort(extractPortsFromJson(configContent)) ?: return
+            // Read temp SOCKS config fragment if present (written by MainViewModel during
+            // Xray TUN mode downloads / update checks).
+            val tempSocksFile = File(filesDir, TEMP_SOCKS_CONFIG_FILENAME)
+            val tempSocksContent = if (tempSocksFile.exists()) {
+                try { tempSocksFile.readText() } catch (e: Exception) {
+                    Log.w(TAG, "Failed to read temp SOCKS config, ignoring it", e)
+                    null
+                }
+            } else null
+            val apiPort = findAvailablePort(
+                extractPortsFromJson(configContent) +
+                    (tempSocksContent?.let { extractPortsFromJson(it) } ?: emptySet())
+            ) ?: return
             prefs.apiPort = apiPort
             Log.d(TAG, "Found and set API port: $apiPort")
 
@@ -220,6 +233,17 @@ class TProxyService : VpnService() {
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
             val injectedConfigContent = ConfigUtils.injectStatsService(prefs, configContent)
+            // Merge temp SOCKS inbound (if any) into the final config sent to xray.
+            val finalConfigContent = if (tempSocksContent != null) {
+                try {
+                    ConfigUtils.mergeAdditionalInbounds(injectedConfigContent, tempSocksContent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to merge temp SOCKS config into xray config, ignoring it", e)
+                    injectedConfigContent
+                }
+            } else {
+                injectedConfigContent
+            }
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
 
             val reader: BufferedReader
@@ -249,7 +273,7 @@ class TProxyService : VpnService() {
                 Log.d(TAG, "Writing config to native Xray stdin.")
                 ParcelFileDescriptor.adoptFd(stdinWriteFd).use { pfd ->
                     ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
-                        out.write(injectedConfigContent.toByteArray())
+                        out.write(finalConfigContent.toByteArray())
                         out.flush()
                     }
                 }
@@ -267,7 +291,7 @@ class TProxyService : VpnService() {
 
                 Log.d(TAG, "Writing config to xray stdin from: $selectedConfigPath")
                 currentProcess.outputStream.use { os ->
-                    os.write(injectedConfigContent.toByteArray())
+                    os.write(finalConfigContent.toByteArray())
                     os.flush()
                 }
                 reader = BufferedReader(InputStreamReader(currentProcess.inputStream))

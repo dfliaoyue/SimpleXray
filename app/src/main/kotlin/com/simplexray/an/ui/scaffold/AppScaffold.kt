@@ -300,6 +300,8 @@ private fun ConfigActions(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val settingsState by mainViewModel.settingsState.collectAsStateWithLifecycle()
+    val isXrayTunActive = settingsState.switches.useXrayTun && !settingsState.switches.disableVpn
 
     IconButton(
         onClick = onSwitchVpnService,
@@ -347,7 +349,7 @@ private fun ConfigActions(
                 mainViewModel.testConnectivity()
                 expanded = false
             },
-            enabled = isServiceEnabled
+            enabled = isServiceEnabled && !isXrayTunActive
         )
     }
 }
@@ -431,6 +433,8 @@ private fun StatsActions(
     mainViewModel: MainViewModel
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val settingsState by mainViewModel.settingsState.collectAsStateWithLifecycle()
+    val isXrayTunActive = settingsState.switches.useXrayTun && !settingsState.switches.disableVpn
 
     IconButton(
         onClick = onSwitchVpnService,
@@ -461,7 +465,7 @@ private fun StatsActions(
                 mainViewModel.testConnectivity()
                 expanded = false
             },
-            enabled = isServiceEnabled
+            enabled = isServiceEnabled && !isXrayTunActive
         )
     }
 }

@@ -52,7 +52,6 @@ object ConfigUtils {
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
         val servicesArray = org.json.JSONArray()
         servicesArray.put("StatsService")
-        servicesArray.put("HandlerService")
         apiObject.put("services", servicesArray)
 
         jsonObject.put("api", apiObject)
@@ -104,6 +103,71 @@ object ConfigUtils {
                 }
             }
         }
+    }
+
+    /**
+     * Builds a minimal Xray JSON config fragment containing a single SOCKS5 inbound
+     * bound to 127.0.0.1 with password authentication.  This fragment is written to
+     * [TEMP_SOCKS_CONFIG_FILENAME] and merged into the running config by [TProxyService]
+     * whenever Xray TUN mode is active and a network task (rule-file download, update check)
+     * needs to reach the internet through the proxy chain.
+     *
+     * The resulting JSON is **not** a complete Xray config – it only contains the
+     * `"inbounds"` array with the single temporary inbound.
+     */
+    fun buildTempSocksConfigJson(
+        port: Int,
+        tag: String,
+        username: String,
+        password: String,
+    ): String {
+        val account = JSONObject()
+        account.put("user", username)
+        account.put("pass", password)
+        val accountsArray = org.json.JSONArray()
+        accountsArray.put(account)
+
+        val settings = JSONObject()
+        settings.put("auth", "password")
+        settings.put("udp", false)
+        settings.put("accounts", accountsArray)
+
+        val inbound = JSONObject()
+        inbound.put("tag", tag)
+        inbound.put("port", port)
+        inbound.put("listen", "127.0.0.1")
+        inbound.put("protocol", "socks")
+        inbound.put("settings", settings)
+
+        val inboundsArray = org.json.JSONArray()
+        inboundsArray.put(inbound)
+
+        val root = JSONObject()
+        root.put("inbounds", inboundsArray)
+        return root.toString(2)
+    }
+
+    /**
+     * Merges the `"inbounds"` array from [additionalConfig] into [baseConfig].
+     * All other top-level keys in [additionalConfig] are ignored – only inbound
+     * entries are appended to the base config's inbounds list.
+     *
+     * Returns [baseConfig] unchanged if [additionalConfig] contains no inbounds.
+     *
+     * @throws JSONException if either config string is not valid JSON.
+     */
+    @Throws(JSONException::class)
+    fun mergeAdditionalInbounds(baseConfig: String, additionalConfig: String): String {
+        val base = JSONObject(baseConfig)
+        val additional = JSONObject(additionalConfig)
+        val additionalInbounds = additional.optJSONArray("inbounds")
+            ?: return baseConfig
+        val baseInbounds = base.optJSONArray("inbounds") ?: org.json.JSONArray()
+        for (i in 0 until additionalInbounds.length()) {
+            baseInbounds.put(additionalInbounds.get(i))
+        }
+        base.put("inbounds", baseInbounds)
+        return base.toString(2)
     }
 }
 
