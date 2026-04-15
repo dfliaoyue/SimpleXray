@@ -137,25 +137,34 @@ object ConfigUtils {
 
     /**
      * Builds a minimal Xray JSON fragment containing a single SOCKS5 inbound bound to
-     * [listenAddress] (a random 127.x.x.x address) without password authentication.
+     * [listenAddress] (a random 127.x.x.x address) with password authentication.
      *
-     * No-auth is safe here because:
-     *  - The listen address is randomised across the 127.x.x.x/8 range.
-     *  - The port is a random ephemeral value.
-     *  - The inbound is short-lived (minimum [TEMP_SOCKS_MIN_LIFETIME_MS] after last use).
-     *  - The fragment is written to the app-private files directory and read by [TProxyService],
-     *    which merges it in-memory with the main config before piping the result to Xray via stdin.
-     *    The merged config (including any API address/port) therefore never touches disk.
+     * The fragment is stored in [TProxyService.pendingTempSocksConfigJson] in memory and
+     * merged into the main config by [TProxyService] before piping it to Xray via stdin.
+     * It is never written to disk.
      *
      * The resulting JSON is an `"inbounds"`-only fragment suitable for merging into the
      * main config via [mergeAdditionalInbounds] before being sent to Xray.
      */
-    fun buildTempSocksConfigJson(listenAddress: String, port: Int, tag: String): String {
+    fun buildTempSocksConfigJson(
+        listenAddress: String,
+        port: Int,
+        tag: String,
+        username: String,
+        password: String,
+    ): String {
         require(port in 1..65535) { "port must be in 1..65535, got $port" }
 
+        val account = JSONObject()
+        account.put("user", username)
+        account.put("pass", password)
+        val accountsArray = org.json.JSONArray()
+        accountsArray.put(account)
+
         val settings = JSONObject()
-        settings.put("auth", "noauth")
+        settings.put("auth", "password")
         settings.put("udp", false)
+        settings.put("accounts", accountsArray)
 
         val inbound = JSONObject()
         inbound.put("tag", tag)

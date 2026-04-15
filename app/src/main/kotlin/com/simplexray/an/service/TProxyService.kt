@@ -25,7 +25,6 @@ import com.simplexray.an.R
 import com.simplexray.an.activity.MainActivity
 import com.simplexray.an.common.ConfigUtils
 import com.simplexray.an.common.ConfigUtils.extractPortsFromJson
-import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
@@ -211,15 +210,8 @@ class TProxyService : VpnService() {
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
 
-            // Read temp SOCKS config fragment if present (written by MainViewModel during
-            // Xray TUN mode downloads / update checks).
-            val tempSocksFile = File(filesDir, TEMP_SOCKS_CONFIG_FILENAME)
-            val tempSocksContent = if (tempSocksFile.exists()) {
-                try { tempSocksFile.readText() } catch (e: Exception) {
-                    Log.w(TAG, "Failed to read temp SOCKS config, ignoring it", e)
-                    null
-                }
-            } else null
+            // Read temp SOCKS config fragment from memory if one was injected by MainViewModel.
+            val tempSocksContent = TProxyService.pendingTempSocksConfigJson
 
             val apiPort = findAvailablePort(
                 extractPortsFromJson(configContent) +
@@ -515,6 +507,12 @@ class TProxyService : VpnService() {
         const val EXTRA_LOG_DATA: String = "log_data"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
+
+        /** In-memory temp SOCKS5 config fragment set by MainViewModel when a temporary
+         *  inbound must be added for TUN-mode proxied tasks.  Cleared by MainViewModel
+         *  after the tasks finish.  Never written to disk. */
+        @Volatile
+        var pendingTempSocksConfigJson: String? = null
 
         /** Weak reference to the running service instance; null when the service is not running. */
         @Volatile
