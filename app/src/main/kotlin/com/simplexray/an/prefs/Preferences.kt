@@ -196,11 +196,6 @@ class Preferences(context: Context) {
             setValueInProvider(USE_XRAY_TUN, value)
         }
 
-    /**
-     * True when Xray is running its own TUN inbound (rather than hev-socks5-tunnel).
-     * This is the single authoritative check used by both the service and the ViewModel
-     * to decide whether VPN-bypass protection is required for outbound sockets.
-     */
     val isXrayTunActive: Boolean
         get() = useXrayTun && !disableVpn
 
