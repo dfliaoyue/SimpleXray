@@ -49,7 +49,7 @@ object ConfigUtils {
         apiObject.put("tag", "api")
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
         val servicesArray = org.json.JSONArray()
-        servicesArray.put("StatsService")
+        servicesArray.put("StatsService")  // Only the stats service is needed; inbound management uses multi-file config fragments instead of gRPC.
         apiObject.put("services", servicesArray)
 
         val policyObject = JSONObject()

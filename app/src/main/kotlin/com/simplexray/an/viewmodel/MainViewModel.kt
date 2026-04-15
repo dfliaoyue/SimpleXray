@@ -1104,7 +1104,7 @@ class MainViewModel(application: Application) :
 
         // Generate a random loopback address, ephemeral port, and cryptographically random credentials.
         val rng = java.security.SecureRandom()
-        val randomAddr = "127.${rng.nextInt(255) + 1}.${rng.nextInt(256)}.${rng.nextInt(254) + 1}"
+        val randomAddr = "127.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}"
         val randomUser = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
         val randomPass = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
         val tag = "temp-socks-${ByteArray(4).also(rng::nextBytes).joinToString("") { "%02x".format(it) }}"
@@ -1184,7 +1184,7 @@ class MainViewModel(application: Application) :
                     }
                 }
             } else if (activeProxiedTaskCount > 0 && tempSocksPort <= 0) {
-                Log.w(TAG, "Inconsistent temp SOCKS state: count=$activeProxiedTaskCount but port=$tempSocksPort; forcing cleanup")
+                Log.e(TAG, "Inconsistent temp SOCKS state: count=$activeProxiedTaskCount but port=$tempSocksPort; forcing cleanup")
                 cleanupTempSocksLocked(restartProxy = true)
             }
         }
