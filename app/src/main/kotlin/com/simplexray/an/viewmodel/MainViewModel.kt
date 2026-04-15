@@ -863,9 +863,12 @@ class MainViewModel(application: Application) :
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
                 // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
                 // SOCKS5 inbound so the test goes through the proxy chain.
+                // Use a generous connect timeout so the full SOCKS proxy chain (including the
+                // time the proxy needs to connect to the target) has enough time to complete.
+                // The user-configured timeout applies to the read phase only.
                 try {
                     withTempSocksProxiedClient(
-                        connectTimeoutMs = timeoutMs,
+                        connectTimeoutMs = TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS,
                         readTimeoutMs = timeoutMs
                     ) { client -> doTest(client) }
                 } catch (e: Exception) {
@@ -875,13 +878,16 @@ class MainViewModel(application: Application) :
                 }
             } else {
                 val proxy = if (_isServiceEnabled.value) {
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
+                    // Use 127.0.0.1 explicitly: prefs.socksAddress may be "0.0.0.0" (a valid
+                    // bind address for Xray) which is not a valid connect destination on Android.
+                    Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort))
                 } else {
                     null
                 }
                 val client = OkHttpClient.Builder().apply {
                     proxy?.let { proxy(it) }
-                    connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                    // Allow the SOCKS connection (including proxy→target leg) sufficient time.
+                    connectTimeout(TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                     readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 }.build()
                 doTest(client)
