@@ -86,7 +86,6 @@ class MainViewModel(application: Application) :
 
     private var coreStatsClient: CoreStatsClient? = null
 
-    // Temporary SOCKS5 state for Xray TUN mode. All fields protected by tempSocksMutex.
     private val tempSocksMutex = Mutex()
     private var tempSocksAddress: String = ""
     private var tempSocksPort: Int = -1
@@ -198,8 +197,6 @@ class MainViewModel(application: Application) :
             _coreStatsState.value = CoreStatsState()
             coreStatsClient?.close()
             coreStatsClient = null
-            // If the service stopped while downloads were using the temp SOCKS inbound,
-            // clean up the state so subsequent downloads start fresh.
             viewModelScope.launch(Dispatchers.IO) { cleanupTempSocksIfActive() }
         }
     }
@@ -889,9 +886,6 @@ class MainViewModel(application: Application) :
             }
 
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
-                // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
-                // SOCKS5 inbound so the test goes through the proxy chain, then use a raw
-                // Socket (same as the other modes) to perform the HTTP request through it.
                 try {
                     val (address, socksPort) = ensureTempSocksReady()
                     val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(address, socksPort))
@@ -997,15 +991,6 @@ class MainViewModel(application: Application) :
         }
     }
 
-    /**
-     * Builds an [OkHttpClient] appropriate for the current service state:
-     *
-     * - **hev-socks5-tunnel mode** (VPN active, non-TUN): routes through the upstream SOCKS5
-     *   proxy so the request goes through the user's proxy chain.
-     * - **Service not running / core-only mode**: plain direct connection.
-     *
-     * A [TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS] read timeout stops stalled downloads automatically.
-     */
     private fun buildHttpClient(): OkHttpClient {
         val serviceActive = _isServiceEnabled.value
         return OkHttpClient.Builder().apply {
@@ -1015,8 +1000,6 @@ class MainViewModel(application: Application) :
             readTimeout(TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         }.build()
     }
-
-    // ── Temporary SOCKS5 helpers for Xray TUN mode ────────────────────────────────────────────
 
     private fun appendToAppLog(message: String) {
         try {
@@ -1043,7 +1026,6 @@ class MainViewModel(application: Application) :
         throw IOException("Temporary SOCKS5 inbound did not bind on $address:$port within the expected time")
     }
 
-    // Must be called while holding tempSocksMutex.
     private fun cleanupTempSocksLocked(restartProxy: Boolean) {
         activeProxiedTaskCount = 0
         tempSocksAddress = ""
@@ -1063,11 +1045,6 @@ class MainViewModel(application: Application) :
         }
     }
 
-    /**
-     * Ensures the shared temporary SOCKS5 inbound is running and returns its address/port.
-     * Passes the config fragment as an intent extra on [TProxyService.ACTION_RELOAD_CONFIG]
-     * so no sensitive data touches the file system.
-     */
     private suspend fun ensureTempSocksReady(): Pair<String, Int> = tempSocksMutex.withLock {
         if (tempSocksPort > 0) {
             cleanupJob?.cancel()
@@ -1191,7 +1168,6 @@ class MainViewModel(application: Application) :
                 _geositeDownloadProgress
             }
 
-            // Core download logic, independent of how the HTTP client was obtained.
             suspend fun doDownload(client: OkHttpClient) {
                 try {
                     progressFlow.value = application.getString(R.string.connecting)
@@ -1270,9 +1246,6 @@ class MainViewModel(application: Application) :
             }
 
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
-                // In Xray TUN mode the app is excluded from VPN routing, so a plain connection
-                // would bypass the proxy chain.  Inject a temporary SOCKS5 inbound via a config
-                // file fragment and restart xray so the download goes through the proxy chain.
                 try {
                     withTempSocksProxiedClient { client -> doDownload(client) }
                 } catch (e: CancellationException) {
@@ -1362,9 +1335,6 @@ class MainViewModel(application: Application) :
             }
 
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
-                // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
-                // SOCKS5 inbound via a config file fragment and restart xray so the request
-                // goes through the proxy chain.
                 try {
                     withTempSocksProxiedClient { client -> doCheck(client) }
                 } catch (e: Exception) {

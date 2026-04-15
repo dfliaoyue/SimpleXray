@@ -443,9 +443,6 @@ class TProxyService : VpnService() {
                 }
             }
         }
-        // Always exclude the app itself from the VPN tunnel so that its own
-        // network traffic (e.g. rule-file downloads, update checks) is never
-        // routed through the TUN interface.
         addDisallowedApplication(BuildConfig.APPLICATION_ID)
     }
 
@@ -509,18 +506,9 @@ class TProxyService : VpnService() {
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
 
-        /** Weak reference to the running service instance; null when the service is not running. */
         @Volatile
         private var instance: WeakReference<TProxyService>? = null
 
-        /**
-         * Calls [VpnService.protect] on [socket] so its traffic bypasses the TUN tunnel and
-         * reaches the real network directly.
-         *
-         * Returns `true` if the service is running and the socket was successfully protected.
-         * Returns `false` when the service is **not** running – this is not an error: when no
-         * VPN tunnel is active, all sockets already reach the real network without protection.
-         */
         fun protectSocket(socket: Socket): Boolean = instance?.get()?.protect(socket) ?: false
 
         init {
