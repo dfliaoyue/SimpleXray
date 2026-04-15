@@ -96,10 +96,6 @@ class TProxyService : VpnService() {
     @Volatile
     private var pendingTempSocksConfig: String? = null
 
-    /**
-     * Kill whichever Xray process is currently running, whether it was started
-     * via ProcessBuilder (managed) or via nativeSpawnXray (native TUN mode).
-     */
     private fun killXrayProcess() {
         xrayProcess?.destroy()
         xrayProcess = null
@@ -246,10 +242,7 @@ class TProxyService : VpnService() {
             val reader: BufferedReader
 
             if (useXrayTun) {
-                // ── Native TUN path ────────────────────────────────────────────
-                // The VPN fd has FD_CLOEXEC set by Android, so it cannot survive
-                // a ProcessBuilder fork+exec.  nativeSpawnXray() uses fork()+dup2()
-                // to move the fd to a fixed slot before exec(), bypassing the issue.
+                // VPN fd has FD_CLOEXEC set; nativeSpawnXray() uses fork()+dup2() to pass it to the child.
                 val vpnFd = tunFd?.fd ?: run {
                     Log.e(TAG, "tunFd is null for Xray TUN mode")
                     return
@@ -265,8 +258,6 @@ class TProxyService : VpnService() {
                 this.xrayPid = currentPid
                 Log.d(TAG, "Xray TUN process started: pid=$currentPid")
 
-                // Write config to Xray's stdin then close the write end so Xray
-                // sees EOF and knows the full config has been delivered.
                 Log.d(TAG, "Writing config to native Xray stdin.")
                 ParcelFileDescriptor.adoptFd(stdinWriteFd).use { pfd ->
                     ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
@@ -280,7 +271,6 @@ class TProxyService : VpnService() {
                     InputStreamReader(ParcelFileDescriptor.AutoCloseInputStream(stdoutPfd))
                 )
             } else {
-                // ── Managed (ProcessBuilder) path ──────────────────────────────
                 currentPid = -1
                 val processBuilder = getProcessBuilder(xrayPath)
                 currentProcess = processBuilder.start()
@@ -294,7 +284,6 @@ class TProxyService : VpnService() {
                 reader = BufferedReader(InputStreamReader(currentProcess.inputStream))
             }
 
-            // ── Shared log-reading loop ────────────────────────────────────────
             Log.d(TAG, "Reading xray process output.")
             var line = reader.readLine()
             while (line != null) {
@@ -528,19 +517,7 @@ class TProxyService : VpnService() {
         @Suppress("FunctionName")
         private external fun TProxyGetStats(): LongArray?
 
-        /**
-         * Fork-exec the Xray binary with the VPN fd properly inherited.
-         *
-         * The VPN fd returned by VpnService.Builder.establish() has FD_CLOEXEC set,
-         * so it is closed before the child process starts when using ProcessBuilder.
-         * This native function uses fork()+dup2() to assign the fd to a fixed slot
-         * (fd 4) before exec(), ensuring it survives into the Xray process.
-         *
-         * @param xrayPath  Absolute path to the Xray binary.
-         * @param assetDir  Directory containing geo-data assets (XRAY_LOCATION_ASSET).
-         * @param vpnFd     The raw fd integer from the VPN ParcelFileDescriptor.
-         * @return          int[3] = { pid, stdout_read_fd, stdin_write_fd }, or null on error.
-         */
+        /** Returns [pid, stdout_read_fd, stdin_write_fd], or null on error. */
         @JvmStatic
         private external fun nativeSpawnXray(
             xrayPath: String,
