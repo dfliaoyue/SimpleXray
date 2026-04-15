@@ -39,6 +39,8 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.io.InterruptedIOException
 import java.net.ServerSocket
+import java.net.Socket
+import java.lang.ref.WeakReference
 import kotlin.concurrent.Volatile
 import kotlin.system.exitProcess
 
@@ -111,6 +113,7 @@ class TProxyService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = WeakReference(this)
         logFileManager = LogFileManager(this)
         Log.d(TAG, "TProxyService created.")
     }
@@ -175,6 +178,7 @@ class TProxyService : VpnService() {
     }
 
     override fun onDestroy() {
+        instance = null
         super.onDestroy()
         handler.removeCallbacks(broadcastLogsRunnable)
         broadcastLogsRunnable.run()
@@ -418,8 +422,10 @@ class TProxyService : VpnService() {
                 }
             }
         }
-        if (prefs.bypassSelectedApps || prefs.apps.isNullOrEmpty())
-            addDisallowedApplication(BuildConfig.APPLICATION_ID)
+        // Always exclude the app itself from the VPN tunnel so that its own
+        // network traffic (e.g. rule-file downloads, update checks) is never
+        // routed through the TUN interface.
+        addDisallowedApplication(BuildConfig.APPLICATION_ID)
     }
 
     private fun stopService() {
@@ -480,6 +486,17 @@ class TProxyService : VpnService() {
         const val EXTRA_LOG_DATA: String = "log_data"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
+
+        /** Weak reference to the running service instance; null when the service is not running. */
+        @Volatile
+        private var instance: WeakReference<TProxyService>? = null
+
+        /**
+         * Calls [VpnService.protect] on [socket] so its traffic bypasses the TUN tunnel and
+         * reaches the real network directly.  Returns true on success, false when the VPN service
+         * is not currently running (in which case no protection is needed).
+         */
+        fun protectSocket(socket: Socket): Boolean = instance?.get()?.protect(socket) ?: false
 
         init {
             System.loadLibrary("hev-socks5-tunnel")

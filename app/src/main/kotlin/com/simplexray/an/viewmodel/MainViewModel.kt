@@ -21,6 +21,7 @@ import com.simplexray.an.BuildConfig
 import com.simplexray.an.R
 import com.simplexray.an.common.CoreStatsClient
 import com.simplexray.an.common.HandlerServiceClient
+import com.simplexray.an.common.ProtectedSocketFactory
 import com.simplexray.an.common.ROUTE_APP_LIST
 import com.simplexray.an.common.ROUTE_CONFIG_EDIT
 import com.simplexray.an.common.ThemeMode
@@ -1073,6 +1074,28 @@ class MainViewModel(application: Application) :
         }
     }
 
+    /**
+     * Builds an [OkHttpClient] appropriate for the current service state:
+     *
+     * - **Xray TUN mode** (`useXrayTun = true`, VPN active): attaches a [ProtectedSocketFactory]
+     *   so that every socket bypasses the TUN tunnel and reaches the real network directly.
+     * - **hev-socks5-tunnel mode** (VPN active, non-TUN): routes through the upstream SOCKS5
+     *   proxy so the request goes through the user's proxy chain.
+     * - **Service not running / core-only mode**: plain direct connection.
+     */
+    private fun buildHttpClient(): OkHttpClient {
+        val serviceActive = _isServiceEnabled.value
+        val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
+        return OkHttpClient.Builder().apply {
+            when {
+                serviceActive && useXrayTun ->
+                    socketFactory(ProtectedSocketFactory())
+                serviceActive ->
+                    proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort)))
+            }
+        }.build()
+    }
+
     fun downloadRuleFile(url: String, fileName: String) {
         val currentJob = if (fileName == "geoip.dat") geoipDownloadJob else geositeDownloadJob
         if (currentJob?.isActive == true) {
@@ -1089,11 +1112,7 @@ class MainViewModel(application: Application) :
                 _geositeDownloadProgress
             }
 
-            val client = OkHttpClient.Builder().apply {
-                if (_isServiceEnabled.value) {
-                    proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort)))
-                }
-            }.build()
+            val client = buildHttpClient()
 
             try {
                 progressFlow.value = application.getString(R.string.connecting)
@@ -1209,11 +1228,7 @@ class MainViewModel(application: Application) :
     fun checkForUpdates() {
         viewModelScope.launch(Dispatchers.IO) {
             _isCheckingForUpdates.value = true
-            val client = OkHttpClient.Builder().apply {
-                if (_isServiceEnabled.value) {
-                    proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort)))
-                }
-            }.build()
+            val client = buildHttpClient()
 
             val request = Request.Builder()
                 .url(application.getString(R.string.source_url) + "/releases/latest")
