@@ -1,5 +1,3 @@
-Forked from lhear/simpleXray for testing new functions only.
-
 # SimpleXray
 
 <img src="https://raw.githubusercontent.com/lhear/SimpleXray/main/metadata/en-US/images/icon.png" alt="icon" width="150">
