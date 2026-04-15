@@ -44,12 +44,15 @@ object ConfigUtils {
     }
 
     @Throws(JSONException::class)
-    fun buildApiConfigFragment(prefs: Preferences): String {
+    fun injectStatsService(prefs: Preferences, configContent: String): String {
+        val jsonObject = JSONObject(configContent)
+
         val apiObject = JSONObject()
         apiObject.put("tag", "api")
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
         val servicesArray = org.json.JSONArray()
-        servicesArray.put("StatsService")  // Only the stats service is needed; inbound management uses multi-file config fragments instead of gRPC.
+        // Only the stats service is needed; inbound management is done via in-memory merge.
+        servicesArray.put("StatsService")
         apiObject.put("services", servicesArray)
 
         val policyObject = JSONObject()
@@ -58,11 +61,41 @@ object ConfigUtils {
         systemObject.put("statsOutboundDownlink", true)
         policyObject.put("system", systemObject)
 
-        val root = JSONObject()
-        root.put("api", apiObject)
-        root.put("stats", JSONObject())
-        root.put("policy", policyObject)
-        return root.toString(2)
+        jsonObject.put("api", apiObject)
+        jsonObject.put("stats", JSONObject())
+        jsonObject.put("policy", policyObject)
+
+        var result = jsonObject.toString(2)
+        result = result.replace("\\/", "/")
+        return result
+    }
+
+    /**
+     * Merges a supplementary inbounds-only config fragment (e.g., the temporary SOCKS5
+     * inbound for Xray TUN mode) into an existing config string by appending its inbounds
+     * to the `"inbounds"` array already present in [baseConfig].
+     *
+     * Both [baseConfig] and [extraInboundsJson] must be valid JSON objects.
+     * [extraInboundsJson] must contain an `"inbounds"` array.
+     *
+     * @throws JSONException if either string cannot be parsed as a JSON object.
+     */
+    @Throws(JSONException::class)
+    fun mergeAdditionalInbounds(baseConfig: String, extraInboundsJson: String): String {
+        val base = JSONObject(baseConfig)
+        val extra = JSONObject(extraInboundsJson)
+
+        val baseInbounds = base.optJSONArray("inbounds") ?: org.json.JSONArray()
+        val extraInbounds = extra.optJSONArray("inbounds") ?: return baseConfig
+
+        for (i in 0 until extraInbounds.length()) {
+            baseInbounds.put(extraInbounds.get(i))
+        }
+        base.put("inbounds", baseInbounds)
+
+        var result = base.toString(2)
+        result = result.replace("\\/", "/")
+        return result
     }
 
     fun extractPortsFromJson(jsonContent: String): Set<Int> {
@@ -103,34 +136,24 @@ object ConfigUtils {
     }
 
     /**
-     * Builds a minimal Xray JSON config fragment containing a single SOCKS5 inbound
-     * bound to [listenAddress] (a random 127.x.x.x address) with password authentication.
-     * This fragment is written to [TEMP_SOCKS_CONFIG_FILENAME] in the app's private
-     * files directory and copied into the xray run-config directory by [TProxyService]
-     * whenever Xray TUN mode is active and a network task (rule-file download, update
-     * check, connectivity test) needs to reach the internet through the proxy chain.
+     * Builds a minimal Xray JSON fragment containing a single SOCKS5 inbound bound to
+     * [listenAddress] (a random 127.x.x.x address) without password authentication.
      *
-     * The resulting JSON is a valid Xray multi-config fragment – it only contains the
-     * `"inbounds"` array with the single temporary inbound.
+     * No-auth is safe here because:
+     *  - The listen address is randomised across the 127.x.x.x/8 range.
+     *  - The port is a random ephemeral value.
+     *  - The inbound is short-lived (minimum [TEMP_SOCKS_MIN_LIFETIME_MS] after last use).
+     *  - The entire config is piped to Xray via stdin and never written to a new disk file.
+     *
+     * The resulting JSON is an `"inbounds"`-only fragment suitable for merging into the
+     * main config via [mergeAdditionalInbounds] before being sent to Xray.
      */
-    fun buildTempSocksConfigJson(
-        listenAddress: String,
-        port: Int,
-        tag: String,
-        username: String,
-        password: String,
-    ): String {
+    fun buildTempSocksConfigJson(listenAddress: String, port: Int, tag: String): String {
         require(port in 1..65535) { "port must be in 1..65535, got $port" }
-        val account = JSONObject()
-        account.put("user", username)
-        account.put("pass", password)
-        val accountsArray = org.json.JSONArray()
-        accountsArray.put(account)
 
         val settings = JSONObject()
-        settings.put("auth", "password")
+        settings.put("auth", "noauth")
         settings.put("udp", false)
-        settings.put("accounts", accountsArray)
 
         val inbound = JSONObject()
         inbound.put("tag", tag)

@@ -211,7 +211,8 @@ class TProxyService : VpnService() {
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
 
-            // Check whether a temporary SOCKS5 config fragment is waiting to be loaded.
+            // Read temp SOCKS config fragment if present (written by MainViewModel during
+            // Xray TUN mode downloads / update checks).
             val tempSocksFile = File(filesDir, TEMP_SOCKS_CONFIG_FILENAME)
             val tempSocksContent = if (tempSocksFile.exists()) {
                 try { tempSocksFile.readText() } catch (e: Exception) {
@@ -220,13 +221,10 @@ class TProxyService : VpnService() {
                 }
             } else null
 
-            // Find an API port that doesn't collide with user-configured or temp-SOCKS ports.
-            val usedPorts = extractPortsFromJson(configContent) +
+            val apiPort = findAvailablePort(
+                extractPortsFromJson(configContent) +
                     (tempSocksContent?.let { extractPortsFromJson(it) } ?: emptySet())
-            val apiPort = findAvailablePort(usedPorts) ?: run {
-                Log.e(TAG, "No available port found for API service")
-                return
-            }
+            ) ?: return
             prefs.apiPort = apiPort
             Log.d(TAG, "Found and set API port: $apiPort")
 
@@ -236,21 +234,19 @@ class TProxyService : VpnService() {
             prefs.apiAddress = "127.$octet2.$octet3.$octet4"
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
-            // Build the run-config directory.  Xray is started with -confdir pointing to
-            // this directory so it picks up all *.json fragments in alphabetical order.
-            val runDir = File(filesDir, "xray-run")
-            runDir.deleteRecursively()
-            runDir.mkdirs()
-
-            // 00_main.json – unmodified user config
-            File(runDir, "00_main.json").writeText(configContent)
-
-            // 01_api.json – API / stats fragment
-            File(runDir, "01_api.json").writeText(ConfigUtils.buildApiConfigFragment(prefs))
-
-            // 02_temp_socks.json – temporary inbound fragment (when active)
-            if (tempSocksContent != null) {
-                File(runDir, "02_temp_socks.json").writeText(tempSocksContent)
+            // Merge API and optional temp-SOCKS inbound into the config in memory.
+            // The merged JSON is piped to Xray via stdin so that no sensitive data
+            // (API address, temp-SOCKS port) ever touches the file system.
+            val injectedConfigContent = ConfigUtils.injectStatsService(prefs, configContent)
+            val finalConfigContent = if (tempSocksContent != null) {
+                try {
+                    ConfigUtils.mergeAdditionalInbounds(injectedConfigContent, tempSocksContent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to merge temp SOCKS config into xray config, ignoring it", e)
+                    injectedConfigContent
+                }
+            } else {
+                injectedConfigContent
             }
 
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
@@ -266,15 +262,26 @@ class TProxyService : VpnService() {
                     Log.e(TAG, "tunFd is null for Xray TUN mode")
                     return
                 }
-                val spawnResult = nativeSpawnXray(xrayPath, filesDir.path, vpnFd, runDir.absolutePath)
+                val spawnResult = nativeSpawnXray(xrayPath, filesDir.path, vpnFd)
                     ?: run {
                         Log.e(TAG, "nativeSpawnXray returned null – spawn failed")
                         return
                     }
                 currentPid = spawnResult[0]
                 val stdoutReadFd  = spawnResult[1]
+                val stdinWriteFd  = spawnResult[2]
                 this.xrayPid = currentPid
                 Log.d(TAG, "Xray TUN process started: pid=$currentPid")
+
+                // Write config to Xray's stdin then close the write end so Xray
+                // sees EOF and knows the full config has been delivered.
+                Log.d(TAG, "Writing config to native Xray stdin.")
+                ParcelFileDescriptor.adoptFd(stdinWriteFd).use { pfd ->
+                    ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
+                        out.write(finalConfigContent.toByteArray())
+                        out.flush()
+                    }
+                }
 
                 stdoutPfd = ParcelFileDescriptor.adoptFd(stdoutReadFd)
                 reader = BufferedReader(
@@ -283,13 +290,15 @@ class TProxyService : VpnService() {
             } else {
                 // ── Managed (ProcessBuilder) path ──────────────────────────────
                 currentPid = -1
-                val processBuilder = ProcessBuilder(xrayPath, "-confdir", runDir.absolutePath)
-                processBuilder.environment()["XRAY_LOCATION_ASSET"] = filesDir.path
-                processBuilder.directory(filesDir)
-                processBuilder.redirectErrorStream(true)
+                val processBuilder = getProcessBuilder(xrayPath)
                 currentProcess = processBuilder.start()
                 this.xrayProcess = currentProcess
 
+                Log.d(TAG, "Writing config to xray stdin from: $selectedConfigPath")
+                currentProcess.outputStream.use { os ->
+                    os.write(finalConfigContent.toByteArray())
+                    os.flush()
+                }
                 reader = BufferedReader(InputStreamReader(currentProcess.inputStream))
             }
 
@@ -330,6 +339,17 @@ class TProxyService : VpnService() {
                 xrayPid = -1
             }
         }
+    }
+
+    private fun getProcessBuilder(xrayPath: String): ProcessBuilder {
+        val filesDir = applicationContext.filesDir
+        val command: MutableList<String> = mutableListOf(xrayPath)
+        val processBuilder = ProcessBuilder(command)
+        val environment = processBuilder.environment()
+        environment["XRAY_LOCATION_ASSET"] = filesDir.path
+        processBuilder.directory(filesDir)
+        processBuilder.redirectErrorStream(true)
+        return processBuilder
     }
 
     private fun stopXray() {
@@ -538,15 +558,13 @@ class TProxyService : VpnService() {
          * @param xrayPath  Absolute path to the Xray binary.
          * @param assetDir  Directory containing geo-data assets (XRAY_LOCATION_ASSET).
          * @param vpnFd     The raw fd integer from the VPN ParcelFileDescriptor.
-         * @param confDir   Directory containing the Xray JSON config fragments.
-         * @return          int[2] = { pid, stdout_read_fd }, or null on error.
+         * @return          int[3] = { pid, stdout_read_fd, stdin_write_fd }, or null on error.
          */
         @JvmStatic
         private external fun nativeSpawnXray(
             xrayPath: String,
             assetDir: String,
-            vpnFd: Int,
-            confDir: String
+            vpnFd: Int
         ): IntArray?
 
         fun getNativeLibraryDir(context: Context?): String? {

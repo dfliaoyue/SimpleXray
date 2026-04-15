@@ -103,8 +103,6 @@ class MainViewModel(application: Application) :
     private var tempSocksAddress: String = ""
     private var tempSocksPort: Int = -1
     private var tempSocksTag: String = ""
-    private var tempSocksUser: String = ""
-    private var tempSocksPass: String = ""
 
     /** Number of in-flight proxied tasks currently using the shared temp SOCKS inbound. */
     private var activeProxiedTaskCount: Int = 0
@@ -112,8 +110,7 @@ class MainViewModel(application: Application) :
     /** Scheduled job to clean up the temp SOCKS inbound after [TEMP_SOCKS_MIN_LIFETIME_MS]. */
     private var cleanupJob: Job? = null
 
-    // Held so it can be restored after a withTempSocksProxiedClient() call temporarily
-    // replaces the global authenticator with a per-session random-credential authenticator.
+    // Global authenticator for the user's regular (non-TUN) SOCKS proxy.
     private val globalSocksAuthenticator = object : java.net.Authenticator() {
         override fun getPasswordAuthentication(): java.net.PasswordAuthentication? {
             val user = prefs.socksUsername
@@ -872,6 +869,7 @@ class MainViewModel(application: Application) :
                         )
                     )
                 } catch (e: Exception) {
+                    Log.e(TAG, "Connectivity test failed for $targetUrl", e)
                     _uiEvent.trySend(
                         MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
                     )
@@ -1063,12 +1061,9 @@ class MainViewModel(application: Application) :
         tempSocksAddress = ""
         tempSocksPort = -1
         tempSocksTag = ""
-        tempSocksUser = ""
-        tempSocksPass = ""
         cleanupJob?.cancel()
         cleanupJob = null
         File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).delete()
-        java.net.Authenticator.setDefault(globalSocksAuthenticator)
         if (restartProxy && _isServiceEnabled.value) {
             appendToAppLog("[SimpleXray] Removing temporary SOCKS5 inbound, reloading proxy.")
             application.startService(
@@ -1102,11 +1097,9 @@ class MainViewModel(application: Application) :
             return@withLock Pair(tempSocksAddress, tempSocksPort)
         }
 
-        // Generate a random loopback address, ephemeral port, and cryptographically random credentials.
+        // Generate a random loopback address, ephemeral port, and tag.
         val rng = java.security.SecureRandom()
         val randomAddr = "127.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}"
-        val randomUser = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
-        val randomPass = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
         val tag = "temp-socks-${ByteArray(4).also(rng::nextBytes).joinToString("") { "%02x".format(it) }}"
 
         val port = run {
@@ -1121,28 +1114,21 @@ class MainViewModel(application: Application) :
             p
         } ?: throw IOException("No free local port available for temporary SOCKS5 inbound")
 
-        // Write the temp config fragment (app-private filesDir; not accessible to other apps).
+        // Write the noauth temp config fragment (app-private filesDir; not accessible to other apps).
+        // Credentials are not needed because the random loopback address + random port already
+        // provide sufficient local isolation against accidental reuse.
         val tempConfigJson = com.simplexray.an.common.ConfigUtils
-            .buildTempSocksConfigJson(randomAddr, port, tag, randomUser, randomPass)
+            .buildTempSocksConfigJson(randomAddr, port, tag)
         try {
             File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).writeText(tempConfigJson)
         } catch (e: IOException) {
             throw IOException("Failed to write temporary SOCKS5 config file", e)
         }
 
-        // Install a per-session authenticator for these random credentials.
-        // It will be replaced by globalSocksAuthenticator in cleanupTempSocksLocked().
-        java.net.Authenticator.setDefault(object : java.net.Authenticator() {
-            override fun getPasswordAuthentication() =
-                java.net.PasswordAuthentication(randomUser, randomPass.toCharArray())
-        })
-
         // Store state before the restart so the finally block can clean up on failure.
         tempSocksAddress = randomAddr
         tempSocksPort = port
         tempSocksTag = tag
-        tempSocksUser = randomUser
-        tempSocksPass = randomPass
         activeProxiedTaskCount = 1
 
         // Restart xray so it picks up the temp config fragment from the filesystem.
