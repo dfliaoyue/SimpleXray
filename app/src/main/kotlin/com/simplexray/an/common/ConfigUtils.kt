@@ -51,7 +51,6 @@ object ConfigUtils {
         apiObject.put("tag", "api")
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
         val servicesArray = org.json.JSONArray()
-        // Only the stats service is needed; inbound management is done via in-memory merge.
         servicesArray.put("StatsService")
         apiObject.put("services", servicesArray)
 
@@ -70,16 +69,6 @@ object ConfigUtils {
         return result
     }
 
-    /**
-     * Merges a supplementary inbounds-only config fragment (e.g., the temporary SOCKS5
-     * inbound for Xray TUN mode) into an existing config string by appending its inbounds
-     * to the `"inbounds"` array already present in [baseConfig].
-     *
-     * Both [baseConfig] and [extraInboundsJson] must be valid JSON objects.
-     * [extraInboundsJson] must contain an `"inbounds"` array.
-     *
-     * @throws JSONException if either string cannot be parsed as a JSON object.
-     */
     @Throws(JSONException::class)
     fun mergeAdditionalInbounds(baseConfig: String, extraInboundsJson: String): String {
         val base = JSONObject(baseConfig)
@@ -135,17 +124,6 @@ object ConfigUtils {
         }
     }
 
-    /**
-     * Builds a minimal Xray JSON fragment containing a single SOCKS5 inbound bound to
-     * [listenAddress] (a random 127.x.x.x address) with password authentication.
-     *
-     * The fragment is stored in [TProxyService.pendingTempSocksConfigJson] in memory and
-     * merged into the main config by [TProxyService] before piping it to Xray via stdin.
-     * It is never written to disk.
-     *
-     * The resulting JSON is an `"inbounds"`-only fragment suitable for merging into the
-     * main config via [mergeAdditionalInbounds] before being sent to Xray.
-     */
     fun buildTempSocksConfigJson(
         listenAddress: String,
         port: Int,

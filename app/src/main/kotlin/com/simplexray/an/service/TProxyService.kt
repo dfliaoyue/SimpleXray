@@ -25,6 +25,7 @@ import com.simplexray.an.R
 import com.simplexray.an.activity.MainActivity
 import com.simplexray.an.common.ConfigUtils
 import com.simplexray.an.common.ConfigUtils.extractPortsFromJson
+import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
@@ -210,8 +211,14 @@ class TProxyService : VpnService() {
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
 
-            // Read temp SOCKS config fragment from memory if one was injected by MainViewModel.
-            val tempSocksContent = TProxyService.pendingTempSocksConfigJson
+            // Read temp SOCKS config fragment if present (written by MainViewModel in Xray TUN mode).
+            val tempSocksFile = File(filesDir, TEMP_SOCKS_CONFIG_FILENAME)
+            val tempSocksContent = if (tempSocksFile.exists()) {
+                try { tempSocksFile.readText() } catch (e: Exception) {
+                    Log.w(TAG, "Failed to read temp SOCKS config, ignoring it", e)
+                    null
+                }
+            } else null
 
             val apiPort = findAvailablePort(
                 extractPortsFromJson(configContent) +
@@ -226,9 +233,6 @@ class TProxyService : VpnService() {
             prefs.apiAddress = "127.$octet2.$octet3.$octet4"
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
-            // Merge API and optional temp-SOCKS inbound into the config in memory.
-            // The merged JSON is piped to Xray via stdin so that no sensitive data
-            // (API address, temp-SOCKS port) ever touches the file system.
             val injectedConfigContent = ConfigUtils.injectStatsService(prefs, configContent)
             val finalConfigContent = if (tempSocksContent != null) {
                 try {
@@ -507,12 +511,6 @@ class TProxyService : VpnService() {
         const val EXTRA_LOG_DATA: String = "log_data"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
-
-        /** In-memory temp SOCKS5 config fragment set by MainViewModel when a temporary
-         *  inbound must be added for TUN-mode proxied tasks.  Cleared by MainViewModel
-         *  after the tasks finish.  Never written to disk. */
-        @Volatile
-        var pendingTempSocksConfigJson: String? = null
 
         /** Weak reference to the running service instance; null when the service is not running. */
         @Volatile

@@ -22,6 +22,7 @@ import com.simplexray.an.R
 import com.simplexray.an.common.CoreStatsClient
 import com.simplexray.an.common.ROUTE_APP_LIST
 import com.simplexray.an.common.ROUTE_CONFIG_EDIT
+import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.common.ThemeMode
 import com.simplexray.an.data.source.FileManager
 import com.simplexray.an.data.source.LogFileManager
@@ -62,22 +63,11 @@ import kotlin.coroutines.cancellation.CancellationException
 
 private const val TAG = "MainViewModel"
 
-/** Inclusive lower bound of the random ephemeral port range used for temporary inbounds. */
 private const val EPHEMERAL_PORT_RANGE_START = 32768
-
-/** Number of candidate ports in the random ephemeral range (32768–60999 inclusive). */
 private const val EPHEMERAL_PORT_RANGE_SIZE = 60999 - EPHEMERAL_PORT_RANGE_START + 1
-
-/** Delay between port-availability probes while waiting for the temp SOCKS inbound to bind. */
 private const val TEMP_SOCKS_PROBE_DELAY_MS = 500L
-
-/** Maximum number of probes before giving up on the temp SOCKS inbound. */
 private const val TEMP_SOCKS_MAX_PROBES = 30
-
-/** Minimum time the temp SOCKS inbound stays alive after the last task finishes (ms). */
 private const val TEMP_SOCKS_MIN_LIFETIME_MS = 10_000L
-
-/** OkHttp read timeout used for proxied downloads/checks – stops if no data for this long. */
 private const val TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS = 10_000L
 
 sealed class MainViewUiEvent {
@@ -96,23 +86,16 @@ class MainViewModel(application: Application) :
 
     private var coreStatsClient: CoreStatsClient? = null
 
-    // ── Temporary SOCKS5 state for Xray TUN mode downloads / update checks ────────────────────
-    // All fields are protected by tempSocksMutex and must only be read or written while holding it.
+    // Temporary SOCKS5 state for Xray TUN mode. All fields protected by tempSocksMutex.
     private val tempSocksMutex = Mutex()
     private var tempSocksAddress: String = ""
     private var tempSocksPort: Int = -1
     private var tempSocksTag: String = ""
     private var tempSocksUser: String = ""
     private var tempSocksPass: String = ""
-
-    /** Number of in-flight proxied tasks currently using the shared temp SOCKS inbound. */
     private var activeProxiedTaskCount: Int = 0
-
-    /** Scheduled job to clean up the temp SOCKS inbound after [TEMP_SOCKS_MIN_LIFETIME_MS]. */
     private var cleanupJob: Job? = null
 
-    // Held so it can be restored after a withTempSocksProxiedClient() call temporarily
-    // replaces the global authenticator with a per-session random-credential authenticator.
     private val globalSocksAuthenticator = object : java.net.Authenticator() {
         override fun getPasswordAuthentication(): java.net.PasswordAuthentication? {
             val user = prefs.socksUsername
@@ -1012,11 +995,6 @@ class MainViewModel(application: Application) :
 
     // ── Temporary SOCKS5 helpers for Xray TUN mode ────────────────────────────────────────────
 
-    /**
-     * Appends [message] to the app log file and broadcasts it to [LogViewModel] so it appears
-     * in the log screen.  Used to record temp-SOCKS lifecycle events without clearing existing
-     * log entries (unlike ACTION_START which clears logs).
-     */
     private fun appendToAppLog(message: String) {
         try {
             LogFileManager(application).appendLog(message)
@@ -1029,12 +1007,6 @@ class MainViewModel(application: Application) :
         }
     }
 
-    /**
-     * Waits up to [TEMP_SOCKS_MAX_PROBES] × [TEMP_SOCKS_PROBE_DELAY_MS] ms for a TCP connection
-     * to `address:port` to succeed, indicating the temporary SOCKS5 inbound is ready.
-     *
-     * @throws IOException if the proxy does not become reachable within the allotted time.
-     */
     private suspend fun waitForSocksProxy(address: String, port: Int) {
         repeat(TEMP_SOCKS_MAX_PROBES) {
             delay(TEMP_SOCKS_PROBE_DELAY_MS)
@@ -1048,16 +1020,7 @@ class MainViewModel(application: Application) :
         throw IOException("Temporary SOCKS5 inbound did not bind on $address:$port within the expected time")
     }
 
-    /**
-     * Cleans up all temp SOCKS state.  Must be called **while holding [tempSocksMutex]**.
-     *
-     * Clears [TProxyService.pendingTempSocksConfigJson] (in-memory only), restores the global
-     * SOCKS authenticator, cancels any pending [cleanupJob], and optionally restarts the xray
-     * process so that it reloads without the temporary inbound.
-     *
-     * @param restartProxy  Whether to send ACTION_RELOAD_CONFIG to [TProxyService] after cleanup.
-     *                      Pass `false` when the service is already stopping or has stopped.
-     */
+    // Must be called while holding tempSocksMutex.
     private fun cleanupTempSocksLocked(restartProxy: Boolean) {
         activeProxiedTaskCount = 0
         tempSocksAddress = ""
@@ -1067,7 +1030,7 @@ class MainViewModel(application: Application) :
         tempSocksPass = ""
         cleanupJob?.cancel()
         cleanupJob = null
-        TProxyService.pendingTempSocksConfigJson = null
+        File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).delete()
         java.net.Authenticator.setDefault(globalSocksAuthenticator)
         if (restartProxy && _isServiceEnabled.value) {
             appendToAppLog("[SimpleXray] Removing temporary SOCKS5 inbound, reloading proxy.")
@@ -1079,31 +1042,17 @@ class MainViewModel(application: Application) :
     }
 
     /**
-     * Ensures that the shared temporary SOCKS5 inbound is running and returns its address/port.
-     *
-     * - If the inbound is already running or in its [TEMP_SOCKS_MIN_LIFETIME_MS] cooldown window,
-     *   cancels any pending cleanup job, increments [activeProxiedTaskCount], and returns the
-     *   existing address/port immediately – no xray restart needed.
-     * - Otherwise, generates a random `127.x.x.x` listen address, cryptographically random
-     *   credentials, sets [TProxyService.pendingTempSocksConfigJson] in memory (never disk),
-     *   installs a per-session [java.net.Authenticator], restarts xray (ACTION_RELOAD_CONFIG),
-     *   and waits for the inbound to become reachable.
-     *
-     * [tempSocksMutex] is held for the entire setup so concurrent callers serialise correctly.
-     *
-     * @return `Pair(address, port)` of the running temporary SOCKS5 inbound.
-     * @throws IOException if no free port can be found or the inbound does not start in time.
+     * Ensures the shared temporary SOCKS5 inbound is running and returns its address/port.
+     * Writes a config fragment to [TEMP_SOCKS_CONFIG_FILENAME] and reloads xray if needed.
      */
     private suspend fun ensureTempSocksReady(): Pair<String, Int> = tempSocksMutex.withLock {
         if (tempSocksPort > 0) {
-            // Inbound is running (or in the min-lifetime cooldown) – reuse it.
             cleanupJob?.cancel()
             cleanupJob = null
             activeProxiedTaskCount++
             return@withLock Pair(tempSocksAddress, tempSocksPort)
         }
 
-        // Generate a random loopback address, ephemeral port, and cryptographically random credentials.
         val rng = java.security.SecureRandom()
         val randomAddr = "127.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}"
         val randomUser = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
@@ -1122,20 +1071,19 @@ class MainViewModel(application: Application) :
             p
         } ?: throw IOException("No free local port available for temporary SOCKS5 inbound")
 
-        // Build the config fragment in memory and pass it to TProxyService via a shared field.
-        // The random credentials are kept only in memory and never written to disk.
         val tempConfigJson = com.simplexray.an.common.ConfigUtils
             .buildTempSocksConfigJson(randomAddr, port, tag, randomUser, randomPass)
-        TProxyService.pendingTempSocksConfigJson = tempConfigJson
+        try {
+            File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).writeText(tempConfigJson)
+        } catch (e: IOException) {
+            throw IOException("Failed to write temporary SOCKS5 config file", e)
+        }
 
-        // Install a per-session authenticator for these random credentials.
-        // It will be replaced by globalSocksAuthenticator in cleanupTempSocksLocked().
         java.net.Authenticator.setDefault(object : java.net.Authenticator() {
             override fun getPasswordAuthentication() =
                 java.net.PasswordAuthentication(randomUser, randomPass.toCharArray())
         })
 
-        // Store state before the restart so the finally block can clean up on failure.
         tempSocksAddress = randomAddr
         tempSocksPort = port
         tempSocksTag = tag
@@ -1143,18 +1091,15 @@ class MainViewModel(application: Application) :
         tempSocksPass = randomPass
         activeProxiedTaskCount = 1
 
-        // Restart xray so it picks up the temp config from the in-memory field.
         appendToAppLog("[SimpleXray] Injecting temporary SOCKS5 inbound at $randomAddr:$port, reloading proxy.")
         application.startService(
             Intent(application, TProxyService::class.java)
                 .setAction(TProxyService.ACTION_RELOAD_CONFIG)
         )
 
-        // Wait for the inbound to become reachable.
         try {
             waitForSocksProxy(randomAddr, port)
         } catch (e: IOException) {
-            // Inbound didn't bind in time – clean up and re-launch xray without the temp config.
             cleanupTempSocksLocked(restartProxy = true)
             throw e
         }
@@ -1162,11 +1107,6 @@ class MainViewModel(application: Application) :
         Pair(tempSocksAddress, tempSocksPort)
     }
 
-    /**
-     * Decrements [activeProxiedTaskCount].  When it reaches zero, schedules [cleanupTempSocksLocked]
-     * to run after [TEMP_SOCKS_MIN_LIFETIME_MS] so the inbound stays alive long enough to be
-     * reused by tasks that start shortly after.
-     */
     private suspend fun decrementAndCleanupIfNeeded() {
         tempSocksMutex.withLock {
             activeProxiedTaskCount = (activeProxiedTaskCount - 1).coerceAtLeast(0)
@@ -1188,10 +1128,6 @@ class MainViewModel(application: Application) :
         }
     }
 
-    /**
-     * Cleans up temp SOCKS state without restarting the proxy.  Called from [stopReceiver]
-     * when the VPN service stops while proxied tasks are still in flight.
-     */
     private suspend fun cleanupTempSocksIfActive() {
         tempSocksMutex.withLock {
             if (activeProxiedTaskCount > 0 || tempSocksPort > 0 || cleanupJob != null) {
@@ -1200,20 +1136,6 @@ class MainViewModel(application: Application) :
         }
     }
 
-    /**
-     * Ensures the shared temporary SOCKS5 inbound is running (starting it via a config-file
-     * fragment + xray reload if necessary), builds an [OkHttpClient] routed through it with
-     * the given timeouts, calls [block], and decrements the active-task counter when done.
-     *
-     * The inbound stays alive for at least [TEMP_SOCKS_MIN_LIFETIME_MS] after the last task
-     * finishes, so back-to-back operations reuse it without an extra xray restart.
-     *
-     * The random credentials are kept only in memory (never written to disk); the config fragment
-     * is passed to [TProxyService] via [TProxyService.pendingTempSocksConfigJson].
-     *
-     * @param connectTimeoutMs  OkHttp connect timeout in ms (default 30 s).
-     * @param readTimeoutMs     OkHttp read timeout in ms (default [TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS]).
-     */
     private suspend fun <T> withTempSocksProxiedClient(
         connectTimeoutMs: Long = 30_000L,
         readTimeoutMs: Long = TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS,
