@@ -1,4 +1,4 @@
-for test purpose only.
+Forked from lhear/simpleXray for testing new functions only.
 
 # SimpleXray
 
