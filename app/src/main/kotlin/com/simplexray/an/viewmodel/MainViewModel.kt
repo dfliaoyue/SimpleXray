@@ -20,11 +20,11 @@ import androidx.lifecycle.viewModelScope
 import com.simplexray.an.BuildConfig
 import com.simplexray.an.R
 import com.simplexray.an.common.CoreStatsClient
-import com.simplexray.an.common.HandlerServiceClient
 import com.simplexray.an.common.ROUTE_APP_LIST
 import com.simplexray.an.common.ROUTE_CONFIG_EDIT
 import com.simplexray.an.common.ThemeMode
 import com.simplexray.an.data.source.FileManager
+import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.prefs.Preferences
 import com.simplexray.an.service.TProxyService
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,16 +40,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
+import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -61,20 +63,12 @@ import kotlin.coroutines.cancellation.CancellationException
 
 private const val TAG = "MainViewModel"
 
-/** Maximum time (ms) the temporary SOCKS5 inbound is allowed to stay alive during a connectivity test. */
-private const val SOCKS_LIFETIME_MS = 5_000L
-
-/** Time (ms) to wait between connection attempts to the newly added SOCKS5 inbound. */
-private const val INBOUND_BIND_DELAY_MS = 300L
-
-/** Number of times to retry connecting to the inbound before giving up. */
-private const val INBOUND_BIND_RETRIES = 5
-
-/** Inclusive lower bound of the random ephemeral port range used for temporary inbounds. */
 private const val EPHEMERAL_PORT_RANGE_START = 32768
-
-/** Number of candidate ports in the random ephemeral range (32768–60999 inclusive). */
 private const val EPHEMERAL_PORT_RANGE_SIZE = 60999 - EPHEMERAL_PORT_RANGE_START + 1
+private const val TEMP_SOCKS_PROBE_DELAY_MS = 500L
+private const val TEMP_SOCKS_MAX_PROBES = 30
+private const val TEMP_SOCKS_MIN_LIFETIME_MS = 10_000L
+private const val TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS = 10_000L
 
 sealed class MainViewUiEvent {
     data class ShowSnackbar(val message: String) : MainViewUiEvent()
@@ -92,8 +86,16 @@ class MainViewModel(application: Application) :
 
     private var coreStatsClient: CoreStatsClient? = null
 
-    // Held so it can be restored after a withTempSocksProxiedClient() call temporarily
-    // replaces the global authenticator with a per-session random-credential authenticator.
+    // Temporary SOCKS5 state for Xray TUN mode. All fields protected by tempSocksMutex.
+    private val tempSocksMutex = Mutex()
+    private var tempSocksAddress: String = ""
+    private var tempSocksPort: Int = -1
+    private var tempSocksTag: String = ""
+    private var tempSocksUser: String = ""
+    private var tempSocksPass: String = ""
+    private var activeProxiedTaskCount: Int = 0
+    private var cleanupJob: Job? = null
+
     private val globalSocksAuthenticator = object : java.net.Authenticator() {
         override fun getPasswordAuthentication(): java.net.PasswordAuthentication? {
             val user = prefs.socksUsername
@@ -196,6 +198,9 @@ class MainViewModel(application: Application) :
             _coreStatsState.value = CoreStatsState()
             coreStatsClient?.close()
             coreStatsClient = null
+            // If the service stopped while downloads were using the temp SOCKS inbound,
+            // clean up the state so subsequent downloads start fresh.
+            viewModelScope.launch(Dispatchers.IO) { cleanupTempSocksIfActive() }
         }
     }
 
@@ -832,167 +837,78 @@ class MainViewModel(application: Application) :
                 _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_invalid_url)))
                 return@launch
             }
+
             val host = url.host
-            val port = if (url.port > 0) url.port else url.defaultPort
+            val urlPort = if (url.port > 0) url.port else url.defaultPort
             val path = if (url.path.isNullOrEmpty()) "/" else url.path
             val isHttps = url.protocol == "https"
             val timeout = prefs.connectivityTestTimeout
-            val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
-            if (useXrayTun) {
-                // The app is excluded from VPN routing via addDisallowedApplication so it
-                // cannot reach the TUN directly.  Instead, we ask Xray at runtime (via its
-                // HandlerService gRPC API) to create a temporary SOCKS5 inbound bound to
-                // 127.0.0.1 with a random high port, run the HTTP test through it, then
-                // remove the inbound.  The inbound lifetime is capped at SOCKS_LIFETIME_MS.
-                val tag = "connectivity-test-temp"
-                // Use the GUI-configured SOCKS5 credentials.  The globalSocksAuthenticator
-                // already holds these so no temporary authenticator override is needed.
-                val testUser = prefs.socksUsername
-                val testPass = prefs.socksPassword
-                // Pick a random high port (32768-60999) to avoid well-known port conflicts.
-                val testPort = run {
-                    val rng = java.security.SecureRandom()
-                    var port: Int? = null
-                    repeat(20) {
-                        val candidate = EPHEMERAL_PORT_RANGE_START + rng.nextInt(EPHEMERAL_PORT_RANGE_SIZE)
-                        if (runCatching { java.net.ServerSocket(candidate).close() }.isSuccess) {
-                            port = candidate
-                            return@repeat
-                        }
-                    }
-                    port
-                }
-                if (testPort == null) {
-                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                    return@launch
-                }
 
-                val handlerClient = HandlerServiceClient.create(prefs.apiAddress, prefs.apiPort)
-                val added = handlerClient.addSocksInbound(tag, testPort, testUser, testPass)
-                if (!added) {
-                    handlerClient.close()
-                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                    return@launch
-                }
+            fun doTest(proxy: Proxy) {
+                val start = System.currentTimeMillis()
                 try {
-                    val socksTimeout = SOCKS_LIFETIME_MS.toInt()
-                    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", testPort))
-                    try {
-                        withTimeout(SOCKS_LIFETIME_MS) {
-                            withContext(Dispatchers.IO) {
-                                // Retry connecting to the inbound: xray may need a moment
-                                // to bind the port after AddInbound returns.
-                                var lastException: Exception? = null
-                                for (attempt in 1..INBOUND_BIND_RETRIES) {
-                                    kotlinx.coroutines.delay(INBOUND_BIND_DELAY_MS)
-                                    val socket = runCatching { Socket(proxy) }.getOrElse { e ->
-                                        lastException = e as? Exception ?: RuntimeException(e)
-                                        null
-                                    }
-                                    if (socket == null) continue
-                                    lastException = null
-                                    try {
-                                        socket.use {
-                                            it.soTimeout = socksTimeout
-                                            val start = System.currentTimeMillis()
-                                            it.connect(InetSocketAddress.createUnresolved(host, port), socksTimeout)
-                                            val (writer, reader) = if (isHttps) {
-                                                val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                                                    .createSocket(it, host, port, true) as javax.net.ssl.SSLSocket
-                                                sslSocket.startHandshake()
-                                                Pair(
-                                                    sslSocket.outputStream.bufferedWriter(),
-                                                    sslSocket.inputStream.bufferedReader()
-                                                )
-                                            } else {
-                                                Pair(
-                                                    it.getOutputStream().bufferedWriter(),
-                                                    it.getInputStream().bufferedReader()
-                                                )
-                                            }
-                                            writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                                            writer.flush()
-                                            val firstLine = reader.readLine()
-                                            val latency = System.currentTimeMillis() - start
-                                            if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                                                _uiEvent.trySend(
-                                                    MainViewUiEvent.ShowSnackbar(
-                                                        application.getString(R.string.connectivity_test_latency, latency.toInt())
-                                                    )
-                                                )
-                                            } else {
-                                                _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                                            }
-                                        }
-                                        return@withContext
-                                    } catch (e: Exception) {
-                                        lastException = e
-                                    }
-                                }
-                                if (lastException != null) {
-                                    _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                                }
-                            }
+                    Socket(proxy).use { socket ->
+                        socket.soTimeout = timeout
+                        socket.connect(InetSocketAddress(host, urlPort), timeout)
+                        val (writer, reader) = if (isHttps) {
+                            val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                                .createSocket(socket, host, urlPort, true) as javax.net.ssl.SSLSocket
+                            sslSocket.startHandshake()
+                            Pair(
+                                sslSocket.outputStream.bufferedWriter(),
+                                sslSocket.inputStream.bufferedReader()
+                            )
+                        } else {
+                            Pair(
+                                socket.getOutputStream().bufferedWriter(),
+                                socket.getInputStream().bufferedReader()
+                            )
                         }
-                    } catch (e: Exception) {
-                        _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed)))
-                    }
-                } finally {
-                    handlerClient.removeInbound(tag)
-                    handlerClient.close()
-                }
-                return@launch
-            }
-
-            // HEV TUN mode: connect through the user-configured SOCKS5 proxy.
-            val proxy =
-                Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
-            try {
-                Socket(proxy).use { socket ->
-                    socket.soTimeout = timeout
-                    val start = System.currentTimeMillis()
-                    socket.connect(InetSocketAddress(host, port), timeout)
-                    val (writer, reader) = if (isHttps) {
-                        val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                            .createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
-                        sslSocket.startHandshake()
-                        Pair(
-                            sslSocket.outputStream.bufferedWriter(),
-                            sslSocket.inputStream.bufferedReader()
-                        )
-                    } else {
-                        Pair(
-                            socket.getOutputStream().bufferedWriter(),
-                            socket.getInputStream().bufferedReader()
-                        )
-                    }
-                    writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
-                    writer.flush()
-                    val firstLine = reader.readLine()
-                    val latency = System.currentTimeMillis() - start
-                    if (firstLine != null && firstLine.startsWith("HTTP/")) {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(
-                                    R.string.connectivity_test_latency,
-                                    latency.toInt()
+                        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                        writer.flush()
+                        val firstLine = reader.readLine()
+                        val latency = System.currentTimeMillis() - start
+                        if (firstLine != null && firstLine.startsWith("HTTP/")) {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(R.string.connectivity_test_latency, latency.toInt())
                                 )
                             )
-                        )
-                    } else {
-                        _uiEvent.trySend(
-                            MainViewUiEvent.ShowSnackbar(
-                                application.getString(R.string.connectivity_test_failed)
+                        } else {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
                             )
-                        )
+                        }
                     }
-                }
-            } catch (e: Exception) {
-                _uiEvent.trySend(
-                    MainViewUiEvent.ShowSnackbar(
-                        application.getString(R.string.connectivity_test_failed)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Connectivity test failed for ${prefs.connectivityTestTarget}", e)
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
                     )
-                )
+                }
+            }
+
+            if (_isServiceEnabled.value && prefs.isXrayTunActive) {
+                // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
+                // SOCKS5 inbound so the test goes through the proxy chain, then use a raw
+                // Socket (same as the other modes) to perform the HTTP request through it.
+                try {
+                    val (address, socksPort) = ensureTempSocksReady()
+                    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(address, socksPort))
+                    try {
+                        doTest(proxy)
+                    } finally {
+                        decrementAndCleanupIfNeeded()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to set up temporary proxy for connectivity test", e)
+                    _uiEvent.trySend(
+                        MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
+                    )
+                }
+            } else {
+                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
+                doTest(proxy)
             }
         }
     }
@@ -1086,9 +1002,9 @@ class MainViewModel(application: Application) :
      *
      * - **hev-socks5-tunnel mode** (VPN active, non-TUN): routes through the upstream SOCKS5
      *   proxy so the request goes through the user's proxy chain.
-     * - **Service not running / core-only mode, or Xray TUN mode**: plain direct connection.
-     *   Callers operating in Xray TUN mode should use [withTempSocksProxiedClient] instead so
-     *   the request travels through the proxy chain with a temporary, short-lived inbound.
+     * - **Service not running / core-only mode**: plain direct connection.
+     *
+     * A [TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS] read timeout stops stalled downloads automatically.
      */
     private fun buildHttpClient(): OkHttpClient {
         val serviceActive = _isServiceEnabled.value
@@ -1096,36 +1012,75 @@ class MainViewModel(application: Application) :
             if (serviceActive && !prefs.isXrayTunActive) {
                 proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort)))
             }
+            readTimeout(TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         }.build()
     }
 
+    // ── Temporary SOCKS5 helpers for Xray TUN mode ────────────────────────────────────────────
+
+    private fun appendToAppLog(message: String) {
+        try {
+            LogFileManager(application).appendLog(message)
+            val intent = Intent(TProxyService.ACTION_LOG_UPDATE)
+            intent.setPackage(application.packageName)
+            intent.putStringArrayListExtra(TProxyService.EXTRA_LOG_DATA, arrayListOf(message))
+            application.sendBroadcast(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to append message to app log", e)
+        }
+    }
+
+    private suspend fun waitForSocksProxy(address: String, port: Int) {
+        repeat(TEMP_SOCKS_MAX_PROBES) {
+            delay(TEMP_SOCKS_PROBE_DELAY_MS)
+            if (runCatching {
+                    Socket().use { s ->
+                        s.connect(InetSocketAddress(address, port), TEMP_SOCKS_PROBE_DELAY_MS.toInt())
+                    }
+                }.isSuccess
+            ) return
+        }
+        throw IOException("Temporary SOCKS5 inbound did not bind on $address:$port within the expected time")
+    }
+
+    // Must be called while holding tempSocksMutex.
+    private fun cleanupTempSocksLocked(restartProxy: Boolean) {
+        activeProxiedTaskCount = 0
+        tempSocksAddress = ""
+        tempSocksPort = -1
+        tempSocksTag = ""
+        tempSocksUser = ""
+        tempSocksPass = ""
+        cleanupJob?.cancel()
+        cleanupJob = null
+        java.net.Authenticator.setDefault(globalSocksAuthenticator)
+        if (restartProxy && _isServiceEnabled.value) {
+            appendToAppLog("[SimpleXray] Removing temporary SOCKS5 inbound, reloading proxy.")
+            application.startService(
+                Intent(application, TProxyService::class.java)
+                    .setAction(TProxyService.ACTION_RELOAD_CONFIG)
+            )
+        }
+    }
+
     /**
-     * Allocates a temporary SOCKS5 inbound via the Xray HandlerService API, using a random port
-     * and randomly generated credentials that are unrelated to the user-configured SOCKS settings.
-     * Builds an [OkHttpClient] routed through this temporary proxy and calls [block] with it.
-     * The inbound is always removed in the `finally` block, regardless of how [block] exits.
-     *
-     * The client is configured with a 30-second connect timeout and a 5-minute per-read timeout
-     * so that large rule-file downloads on slow connections complete successfully.
-     *
-     * A dedicated [java.net.Authenticator] is installed for the duration of the call and
-     * [globalSocksAuthenticator] is restored unconditionally in the `finally` block.  This
-     * authenticator is purposely isolated from [globalSocksAuthenticator] and the user-visible
-     * SOCKS credentials.
-     *
-     * Used exclusively in Xray TUN mode so the app can reach the internet for its own network
-     * tasks (rule-file downloads, update checks) while still routing through the proxy chain.
-     *
-     * @throws IOException if a free local port cannot be found or the inbound cannot be created.
+     * Ensures the shared temporary SOCKS5 inbound is running and returns its address/port.
+     * Passes the config fragment as an intent extra on [TProxyService.ACTION_RELOAD_CONFIG]
+     * so no sensitive data touches the file system.
      */
-    private suspend fun <T> withTempSocksProxiedClient(
-        tag: String,
-        block: suspend (OkHttpClient) -> T,
-    ): T = withContext(Dispatchers.IO) {
+    private suspend fun ensureTempSocksReady(): Pair<String, Int> = tempSocksMutex.withLock {
+        if (tempSocksPort > 0) {
+            cleanupJob?.cancel()
+            cleanupJob = null
+            activeProxiedTaskCount++
+            return@withLock Pair(tempSocksAddress, tempSocksPort)
+        }
+
         val rng = java.security.SecureRandom()
-        // 8 random bytes each for username and password, hex-encoded.
+        val randomAddr = "127.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}.${rng.nextInt(254) + 1}"
         val randomUser = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
         val randomPass = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
+        val tag = "temp-socks-${ByteArray(4).also(rng::nextBytes).joinToString("") { "%02x".format(it) }}"
 
         val port = run {
             var p: Int? = null
@@ -1139,54 +1094,84 @@ class MainViewModel(application: Application) :
             p
         } ?: throw IOException("No free local port available for temporary SOCKS5 inbound")
 
-        val handlerClient = HandlerServiceClient.create(prefs.apiAddress, prefs.apiPort)
-        val added = handlerClient.addSocksInbound(tag, port, randomUser, randomPass)
-        if (!added) {
-            handlerClient.close()
-            throw IOException("Failed to create temporary SOCKS5 inbound (tag=$tag)")
-        }
+        val tempConfigJson = com.simplexray.an.common.ConfigUtils
+            .buildTempSocksConfigJson(randomAddr, port, tag, randomUser, randomPass)
 
-        // Install a per-session authenticator for these random credentials.
-        // globalSocksAuthenticator is restored unconditionally in the finally block.
-        val tempAuth = object : java.net.Authenticator() {
+        java.net.Authenticator.setDefault(object : java.net.Authenticator() {
             override fun getPasswordAuthentication() =
                 java.net.PasswordAuthentication(randomUser, randomPass.toCharArray())
-        }
-        java.net.Authenticator.setDefault(tempAuth)
-        try {
-            // Wait for Xray to bind the port before handing out the client.
-            var bound = false
-            for (attempt in 1..INBOUND_BIND_RETRIES) {
-                kotlinx.coroutines.delay(INBOUND_BIND_DELAY_MS)
-                if (runCatching {
-                        java.net.Socket().use { s ->
-                            s.connect(
-                                InetSocketAddress("127.0.0.1", port),
-                                INBOUND_BIND_DELAY_MS.toInt(),
-                            )
-                        }
-                    }.isSuccess
-                ) {
-                    bound = true
-                    break
-                }
-            }
-            if (!bound) {
-                throw IOException("Temporary SOCKS5 inbound did not bind within the expected time (tag=$tag)")
-            }
+        })
 
-            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port))
-            val client = OkHttpClient.Builder()
-                .proxy(proxy)
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(5, TimeUnit.MINUTES)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .build()
-            block(client)
+        tempSocksAddress = randomAddr
+        tempSocksPort = port
+        tempSocksTag = tag
+        tempSocksUser = randomUser
+        tempSocksPass = randomPass
+        activeProxiedTaskCount = 1
+
+        appendToAppLog("[SimpleXray] Injecting temporary SOCKS5 inbound at $randomAddr:$port, reloading proxy.")
+        application.startService(
+            Intent(application, TProxyService::class.java)
+                .setAction(TProxyService.ACTION_RELOAD_CONFIG)
+                .putExtra(TProxyService.EXTRA_TEMP_SOCKS_CONFIG, tempConfigJson)
+        )
+
+        try {
+            waitForSocksProxy(randomAddr, port)
+        } catch (e: IOException) {
+            cleanupTempSocksLocked(restartProxy = true)
+            throw e
+        }
+
+        Pair(tempSocksAddress, tempSocksPort)
+    }
+
+    private suspend fun decrementAndCleanupIfNeeded() {
+        tempSocksMutex.withLock {
+            activeProxiedTaskCount = (activeProxiedTaskCount - 1).coerceAtLeast(0)
+            if (activeProxiedTaskCount == 0 && tempSocksPort > 0) {
+                cleanupJob?.cancel()
+                cleanupJob = viewModelScope.launch(Dispatchers.IO) {
+                    delay(TEMP_SOCKS_MIN_LIFETIME_MS)
+                    tempSocksMutex.withLock {
+                        if (activeProxiedTaskCount == 0 && tempSocksPort > 0) {
+                            cleanupTempSocksLocked(restartProxy = true)
+                        }
+                        cleanupJob = null
+                    }
+                }
+            } else if (activeProxiedTaskCount > 0 && tempSocksPort <= 0) {
+                Log.e(TAG, "Inconsistent temp SOCKS state: count=$activeProxiedTaskCount but port=$tempSocksPort; forcing cleanup")
+                cleanupTempSocksLocked(restartProxy = true)
+            }
+        }
+    }
+
+    private suspend fun cleanupTempSocksIfActive() {
+        tempSocksMutex.withLock {
+            if (activeProxiedTaskCount > 0 || tempSocksPort > 0 || cleanupJob != null) {
+                cleanupTempSocksLocked(restartProxy = false)
+            }
+        }
+    }
+
+    private suspend fun <T> withTempSocksProxiedClient(
+        connectTimeoutMs: Long = 30_000L,
+        readTimeoutMs: Long = TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS,
+        block: suspend (OkHttpClient) -> T
+    ): T {
+        val (address, port) = ensureTempSocksReady()
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(address, port))
+        val client = OkHttpClient.Builder()
+            .proxy(proxy)
+            .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+            .writeTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
+            .build()
+        try {
+            return block(client)
         } finally {
-            java.net.Authenticator.setDefault(globalSocksAuthenticator)
-            handlerClient.removeInbound(tag)
-            handlerClient.close()
+            decrementAndCleanupIfNeeded()
         }
     }
 
@@ -1284,13 +1269,12 @@ class MainViewModel(application: Application) :
                 }
             }
 
-            val tag = "internal-dl-${fileName.removeSuffix(".dat")}"
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
                 // In Xray TUN mode the app is excluded from VPN routing, so a plain connection
-                // would bypass the proxy chain.  Create a temporary inbound with random
-                // credentials so the download goes through the proxy chain.
+                // would bypass the proxy chain.  Inject a temporary SOCKS5 inbound via a config
+                // file fragment and restart xray so the download goes through the proxy chain.
                 try {
-                    withTempSocksProxiedClient(tag) { client -> doDownload(client) }
+                    withTempSocksProxiedClient { client -> doDownload(client) }
                 } catch (e: CancellationException) {
                     Log.d(TAG, "Download cancelled while setting up proxy for $fileName")
                     _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.download_cancelled)))
@@ -1378,10 +1362,11 @@ class MainViewModel(application: Application) :
             }
 
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
-                // In Xray TUN mode the app is excluded from VPN routing.  Use a temporary
-                // inbound with random credentials so the request goes through the proxy chain.
+                // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
+                // SOCKS5 inbound via a config file fragment and restart xray so the request
+                // goes through the proxy chain.
                 try {
-                    withTempSocksProxiedClient("internal-update-check") { client -> doCheck(client) }
+                    withTempSocksProxiedClient { client -> doCheck(client) }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to set up temporary proxy for update check", e)
                     _uiEvent.trySend(

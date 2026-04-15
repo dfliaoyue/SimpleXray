@@ -93,6 +93,10 @@ class TProxyService : VpnService() {
     @Volatile
     private var reloadingRequested = false
 
+    /** Temp SOCKS5 config fragment delivered via intent extra; consumed once by [runXrayProcess]. */
+    @Volatile
+    private var pendingTempSocksConfig: String? = null
+
     /**
      * Kill whichever Xray process is currently running, whether it was started
      * via ProcessBuilder (managed) or via nativeSpawnXray (native TUN mode).
@@ -127,6 +131,7 @@ class TProxyService : VpnService() {
             }
 
             ACTION_RELOAD_CONFIG -> {
+                pendingTempSocksConfig = intent.getStringExtra(EXTRA_TEMP_SOCKS_CONFIG)
                 val prefs = Preferences(this)
                 if (prefs.disableVpn) {
                     Log.d(TAG, "Received RELOAD_CONFIG action (core-only mode)")
@@ -209,7 +214,14 @@ class TProxyService : VpnService() {
             val selectedConfigPath = prefs.selectedConfigPath ?: return
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
-            val apiPort = findAvailablePort(extractPortsFromJson(configContent)) ?: return
+
+            // Read temp SOCKS config fragment if delivered via intent extra.
+            val tempSocksContent = pendingTempSocksConfig.also { pendingTempSocksConfig = null }
+
+            val apiPort = findAvailablePort(
+                extractPortsFromJson(configContent) +
+                    (tempSocksContent?.let { extractPortsFromJson(it) } ?: emptySet())
+            ) ?: return
             prefs.apiPort = apiPort
             Log.d(TAG, "Found and set API port: $apiPort")
 
@@ -220,6 +232,17 @@ class TProxyService : VpnService() {
             Log.d(TAG, "Randomized API address: ${prefs.apiAddress}")
 
             val injectedConfigContent = ConfigUtils.injectStatsService(prefs, configContent)
+            val finalConfigContent = if (tempSocksContent != null) {
+                try {
+                    ConfigUtils.mergeAdditionalInbounds(injectedConfigContent, tempSocksContent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to merge temp SOCKS config into xray config, ignoring it", e)
+                    injectedConfigContent
+                }
+            } else {
+                injectedConfigContent
+            }
+
             val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
 
             val reader: BufferedReader
@@ -249,7 +272,7 @@ class TProxyService : VpnService() {
                 Log.d(TAG, "Writing config to native Xray stdin.")
                 ParcelFileDescriptor.adoptFd(stdinWriteFd).use { pfd ->
                     ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
-                        out.write(injectedConfigContent.toByteArray())
+                        out.write(finalConfigContent.toByteArray())
                         out.flush()
                     }
                 }
@@ -267,7 +290,7 @@ class TProxyService : VpnService() {
 
                 Log.d(TAG, "Writing config to xray stdin from: $selectedConfigPath")
                 currentProcess.outputStream.use { os ->
-                    os.write(injectedConfigContent.toByteArray())
+                    os.write(finalConfigContent.toByteArray())
                     os.flush()
                 }
                 reader = BufferedReader(InputStreamReader(currentProcess.inputStream))
@@ -484,6 +507,7 @@ class TProxyService : VpnService() {
         const val ACTION_LOG_UPDATE: String = "com.simplexray.an.LOG_UPDATE"
         const val ACTION_RELOAD_CONFIG: String = "com.simplexray.an.RELOAD_CONFIG"
         const val EXTRA_LOG_DATA: String = "log_data"
+        const val EXTRA_TEMP_SOCKS_CONFIG: String = "temp_socks_config"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
 

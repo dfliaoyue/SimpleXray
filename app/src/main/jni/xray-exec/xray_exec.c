@@ -10,16 +10,16 @@
  * (CHILD_TUN_FD = 4) *before* exec().  dup2() does not copy FD_CLOEXEC, so fd
  * 4 survives exec and is visible to Xray as its TUN fd.
  *
- * The function also creates stdin / stdout pipes so that the caller can write
- * the Xray config JSON to stdin and read Xray log output from stdout, exactly
- * mirroring the existing ProcessBuilder-based code path.
+ * The merged Xray config JSON (already assembled in Kotlin) is delivered to
+ * Xray via stdin so that no sensitive data (API address, temp-SOCKS port) ever
+ * touches the file system.  A stdout pipe allows the caller to read Xray logs.
  *
  * JNI signature:
  *   int[] TProxyService.nativeSpawnXray(
  *       String xrayPath, String assetDir, int vpnFd)
  *
- * Returns int[3] = { pid, stdout_read_fd, stdin_write_fd } on success, or null
- * on failure.
+ * Returns int[3] = { pid, stdout_read_fd, stdin_write_fd } on success,
+ * or null on failure.
  */
 
 #include <jni.h>
@@ -96,15 +96,15 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     const char *xray_path = (*env)->GetStringUTFChars(env, xray_path_j, NULL);
     const char *asset_dir = (*env)->GetStringUTFChars(env, asset_dir_j,  NULL);
 
-    /* stdin pipe:  parent writes config → child reads  (stdin_pipe[0] = read end) */
+    /* stdin pipe:  parent writes config → child reads  (stdin_pipe[0]  = read end) */
     /* stdout pipe: child writes logs   → parent reads  (stdout_pipe[0] = read end) */
     int stdin_pipe[2]  = {-1, -1};
     int stdout_pipe[2] = {-1, -1};
 
     if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0) {
         LOGE("pipe() failed: %s", strerror(errno));
-        if (stdin_pipe[0]  >= 0) { close(stdin_pipe[0]);  close(stdin_pipe[1]);  }
-        if (stdout_pipe[0] >= 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
+        close(stdin_pipe[0]);  close(stdin_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
         (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
         (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
         return NULL;
@@ -140,8 +140,7 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     new_env[ni++] = tun_fd_env;
     new_env[ni]   = NULL;
 
-    /* argv: just the binary path – Xray reads config from stdin when no -config
-     * argument is given, matching the existing ProcessBuilder code path. */
+    /* argv: xray_path only – Xray reads its JSON config from stdin. */
     char *argv[] = { (char *)xray_path, NULL };
 
     pid_t pid = fork();
@@ -162,17 +161,15 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
         prctl(PR_SET_PDEATHSIG, SIGKILL);
 
         /* stdin ← read end of stdin pipe */
-        dup2(stdin_pipe[0], STDIN_FILENO);
+        dup2(stdin_pipe[0],  STDIN_FILENO);
 
         /* stdout + stderr → write end of stdout pipe */
         dup2(stdout_pipe[1], STDOUT_FILENO);
         dup2(stdout_pipe[1], STDERR_FILENO);
 
-        /* Close the original pipe ends (already dup2'd to 0/1/2). */
-        close(stdin_pipe[0]);
-        close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
-        close(stdout_pipe[1]);
+        /* Close the original pipe ends (already dup2'd). */
+        close(stdin_pipe[0]);  close(stdin_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
 
         /* Assign the VPN fd to CHILD_TUN_FD (dup2 never sets FD_CLOEXEC). */
         if ((int)vpn_fd >= 0 && (int)vpn_fd != CHILD_TUN_FD) {
@@ -193,20 +190,19 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     free(new_env);
 
     /* Close the ends that belong to the child. */
-    close(stdin_pipe[0]);   /* child reads from this; parent must not keep it */
-    close(stdout_pipe[1]);  /* child writes to this;  parent must not keep it */
+    close(stdin_pipe[0]);   /* child reads from this;  parent must not keep it */
+    close(stdout_pipe[1]);  /* child writes to this;   parent must not keep it */
 
     (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
     (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
 
-    LOGI("Spawned xray pid=%d stdin_write_fd=%d stdout_read_fd=%d",
-         pid, stdin_pipe[1], stdout_pipe[0]);
+    LOGI("Spawned xray pid=%d stdout_read_fd=%d stdin_write_fd=%d",
+         pid, stdout_pipe[0], stdin_pipe[1]);
 
     /* Return { pid, stdout_read_fd, stdin_write_fd } */
     jintArray result = (*env)->NewIntArray(env, 3);
     if (!result) {
-        close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
+        close(stdout_pipe[0]); close(stdin_pipe[1]);
         return NULL;
     }
     jint arr[3] = { (jint)pid, (jint)stdout_pipe[0], (jint)stdin_pipe[1] };
