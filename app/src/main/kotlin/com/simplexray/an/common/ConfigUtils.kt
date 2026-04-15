@@ -143,7 +143,9 @@ object ConfigUtils {
      *  - The listen address is randomised across the 127.x.x.x/8 range.
      *  - The port is a random ephemeral value.
      *  - The inbound is short-lived (minimum [TEMP_SOCKS_MIN_LIFETIME_MS] after last use).
-     *  - The entire config is piped to Xray via stdin and never written to a new disk file.
+     *  - The fragment is written to the app-private files directory and read by [TProxyService],
+     *    which merges it in-memory with the main config before piping the result to Xray via stdin.
+     *    The merged config (including any API address/port) therefore never touches disk.
      *
      * The resulting JSON is an `"inbounds"`-only fragment suitable for merging into the
      * main config via [mergeAdditionalInbounds] before being sent to Xray.

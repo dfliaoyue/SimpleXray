@@ -110,7 +110,9 @@ class MainViewModel(application: Application) :
     /** Scheduled job to clean up the temp SOCKS inbound after [TEMP_SOCKS_MIN_LIFETIME_MS]. */
     private var cleanupJob: Job? = null
 
-    // Global authenticator for the user's regular (non-TUN) SOCKS proxy.
+    // Global authenticator for the user's regular (non-TUN) SOCKS proxy credentials.
+    // Used by OkHttp when routing downloads/update-checks through the upstream SOCKS proxy
+    // in hev-socks5-tunnel mode.
     private val globalSocksAuthenticator = object : java.net.Authenticator() {
         override fun getPasswordAuthentication(): java.net.PasswordAuthentication? {
             val user = prefs.socksUsername
@@ -1079,8 +1081,8 @@ class MainViewModel(application: Application) :
      * - If the inbound is already running or in its [TEMP_SOCKS_MIN_LIFETIME_MS] cooldown window,
      *   cancels any pending cleanup job, increments [activeProxiedTaskCount], and returns the
      *   existing address/port immediately – no xray restart needed.
-     * - Otherwise, generates a random `127.x.x.x` listen address, cryptographically random
-     *   credentials, writes [TEMP_SOCKS_CONFIG_FILENAME] to the app-private files directory,
+     * - Otherwise, generates a random `127.x.x.x` listen address and ephemeral port (noauth),
+     *   writes the fragment to [TEMP_SOCKS_CONFIG_FILENAME] in the app-private files directory,
      *   restarts xray (ACTION_RELOAD_CONFIG), and waits for the inbound to become reachable.
      *
      * [tempSocksMutex] is held for the entire setup so concurrent callers serialise correctly.
@@ -1196,8 +1198,9 @@ class MainViewModel(application: Application) :
      * The inbound stays alive for at least [TEMP_SOCKS_MIN_LIFETIME_MS] after the last task
      * finishes, so back-to-back operations reuse it without an extra xray restart.
      *
-     * The random credentials are kept only in memory; the config fragment lives in the
-     * app-private files directory.
+     * The inbound uses noauth (no credentials); the random 127.x.x.x address and ephemeral port
+     * provide local isolation.  The noauth fragment is stored in the app-private files directory;
+     * the final merged config (including API address/port) is piped to Xray via stdin only.
      *
      * @param connectTimeoutMs  OkHttp connect timeout in ms (default 30 s).
      * @param readTimeoutMs     OkHttp read timeout in ms (default [TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS]).
