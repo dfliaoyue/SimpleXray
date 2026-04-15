@@ -93,7 +93,6 @@ class TProxyService : VpnService() {
     @Volatile
     private var reloadingRequested = false
 
-    /** Temp SOCKS5 config fragment delivered via intent extra; consumed once by [runXrayProcess]. */
     @Volatile
     private var pendingTempSocksConfig: String? = null
 
@@ -215,7 +214,6 @@ class TProxyService : VpnService() {
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
 
-            // Read temp SOCKS config fragment if delivered via intent extra.
             val tempSocksContent = pendingTempSocksConfig.also { pendingTempSocksConfig = null }
 
             val apiPort = findAvailablePort(
