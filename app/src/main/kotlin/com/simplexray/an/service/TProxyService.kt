@@ -25,7 +25,6 @@ import com.simplexray.an.R
 import com.simplexray.an.activity.MainActivity
 import com.simplexray.an.common.ConfigUtils
 import com.simplexray.an.common.ConfigUtils.extractPortsFromJson
-import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
@@ -94,6 +93,10 @@ class TProxyService : VpnService() {
     @Volatile
     private var reloadingRequested = false
 
+    /** Temp SOCKS5 config fragment delivered via intent extra; consumed once by [runXrayProcess]. */
+    @Volatile
+    private var pendingTempSocksConfig: String? = null
+
     /**
      * Kill whichever Xray process is currently running, whether it was started
      * via ProcessBuilder (managed) or via nativeSpawnXray (native TUN mode).
@@ -128,6 +131,7 @@ class TProxyService : VpnService() {
             }
 
             ACTION_RELOAD_CONFIG -> {
+                pendingTempSocksConfig = intent.getStringExtra(EXTRA_TEMP_SOCKS_CONFIG)
                 val prefs = Preferences(this)
                 if (prefs.disableVpn) {
                     Log.d(TAG, "Received RELOAD_CONFIG action (core-only mode)")
@@ -211,14 +215,8 @@ class TProxyService : VpnService() {
             val xrayPath = "$libraryDir/libxray.so"
             val configContent = File(selectedConfigPath).readText()
 
-            // Read temp SOCKS config fragment if present (written by MainViewModel in Xray TUN mode).
-            val tempSocksFile = File(filesDir, TEMP_SOCKS_CONFIG_FILENAME)
-            val tempSocksContent = if (tempSocksFile.exists()) {
-                try { tempSocksFile.readText() } catch (e: Exception) {
-                    Log.w(TAG, "Failed to read temp SOCKS config, ignoring it", e)
-                    null
-                }
-            } else null
+            // Read temp SOCKS config fragment if delivered via intent extra.
+            val tempSocksContent = pendingTempSocksConfig.also { pendingTempSocksConfig = null }
 
             val apiPort = findAvailablePort(
                 extractPortsFromJson(configContent) +
@@ -509,6 +507,7 @@ class TProxyService : VpnService() {
         const val ACTION_LOG_UPDATE: String = "com.simplexray.an.LOG_UPDATE"
         const val ACTION_RELOAD_CONFIG: String = "com.simplexray.an.RELOAD_CONFIG"
         const val EXTRA_LOG_DATA: String = "log_data"
+        const val EXTRA_TEMP_SOCKS_CONFIG: String = "temp_socks_config"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
 

@@ -22,7 +22,6 @@ import com.simplexray.an.R
 import com.simplexray.an.common.CoreStatsClient
 import com.simplexray.an.common.ROUTE_APP_LIST
 import com.simplexray.an.common.ROUTE_CONFIG_EDIT
-import com.simplexray.an.common.TEMP_SOCKS_CONFIG_FILENAME
 import com.simplexray.an.common.ThemeMode
 import com.simplexray.an.data.source.FileManager
 import com.simplexray.an.data.source.LogFileManager
@@ -49,7 +48,6 @@ import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.io.File
 import java.io.IOException
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -1030,7 +1028,6 @@ class MainViewModel(application: Application) :
         tempSocksPass = ""
         cleanupJob?.cancel()
         cleanupJob = null
-        File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).delete()
         java.net.Authenticator.setDefault(globalSocksAuthenticator)
         if (restartProxy && _isServiceEnabled.value) {
             appendToAppLog("[SimpleXray] Removing temporary SOCKS5 inbound, reloading proxy.")
@@ -1043,7 +1040,8 @@ class MainViewModel(application: Application) :
 
     /**
      * Ensures the shared temporary SOCKS5 inbound is running and returns its address/port.
-     * Writes a config fragment to [TEMP_SOCKS_CONFIG_FILENAME] and reloads xray if needed.
+     * Passes the config fragment as an intent extra on [TProxyService.ACTION_RELOAD_CONFIG]
+     * so no sensitive data touches the file system.
      */
     private suspend fun ensureTempSocksReady(): Pair<String, Int> = tempSocksMutex.withLock {
         if (tempSocksPort > 0) {
@@ -1073,11 +1071,6 @@ class MainViewModel(application: Application) :
 
         val tempConfigJson = com.simplexray.an.common.ConfigUtils
             .buildTempSocksConfigJson(randomAddr, port, tag, randomUser, randomPass)
-        try {
-            File(application.filesDir, TEMP_SOCKS_CONFIG_FILENAME).writeText(tempConfigJson)
-        } catch (e: IOException) {
-            throw IOException("Failed to write temporary SOCKS5 config file", e)
-        }
 
         java.net.Authenticator.setDefault(object : java.net.Authenticator() {
             override fun getPasswordAuthentication() =
@@ -1095,6 +1088,7 @@ class MainViewModel(application: Application) :
         application.startService(
             Intent(application, TProxyService::class.java)
                 .setAction(TProxyService.ACTION_RELOAD_CONFIG)
+                .putExtra(TProxyService.EXTRA_TEMP_SOCKS_CONFIG, tempConfigJson)
         )
 
         try {
