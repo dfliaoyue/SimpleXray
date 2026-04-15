@@ -121,6 +121,7 @@ object ConfigUtils {
         username: String,
         password: String,
     ): String {
+        require(port in 1..65535) { "port must be in 1..65535, got $port" }
         val account = JSONObject()
         account.put("user", username)
         account.put("pass", password)

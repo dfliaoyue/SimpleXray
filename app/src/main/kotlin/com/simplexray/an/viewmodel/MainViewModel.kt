@@ -1082,7 +1082,7 @@ class MainViewModel(application: Application) :
         val rng = java.security.SecureRandom()
         val randomUser = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
         val randomPass = ByteArray(8).also(rng::nextBytes).joinToString("") { "%02x".format(it) }
-        val tag = "tsp-${ByteArray(4).also(rng::nextBytes).joinToString("") { "%02x".format(it) }}"
+        val tag = "temp-socks-${ByteArray(4).also(rng::nextBytes).joinToString("") { "%02x".format(it) }}"
 
         val port = run {
             var p: Int? = null
@@ -1145,8 +1145,11 @@ class MainViewModel(application: Application) :
      */
     private suspend fun decrementAndCleanupIfNeeded() {
         tempSocksMutex.withLock {
-            if (activeProxiedTaskCount > 0) activeProxiedTaskCount--
+            activeProxiedTaskCount = (activeProxiedTaskCount - 1).coerceAtLeast(0)
             if (activeProxiedTaskCount == 0 && tempSocksPort > 0) {
+                cleanupTempSocksLocked(restartProxy = true)
+            } else if (activeProxiedTaskCount > 0 && tempSocksPort <= 0) {
+                Log.w(TAG, "Inconsistent temp SOCKS state: count=$activeProxiedTaskCount but port=$tempSocksPort; forcing cleanup")
                 cleanupTempSocksLocked(restartProxy = true)
             }
         }
