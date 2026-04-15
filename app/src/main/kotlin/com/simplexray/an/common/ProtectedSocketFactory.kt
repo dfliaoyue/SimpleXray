@@ -17,7 +17,7 @@ import javax.net.SocketFactory
  * connections bypass the active VPN tunnel.
  */
 class ProtectedSocketFactory(
-    private val delegate: SocketFactory = getDefault()
+    private val delegate: SocketFactory = SocketFactory.getDefault()
 ) : SocketFactory() {
 
     /**
