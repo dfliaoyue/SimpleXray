@@ -1085,10 +1085,9 @@ class MainViewModel(application: Application) :
      */
     private fun buildHttpClient(): OkHttpClient {
         val serviceActive = _isServiceEnabled.value
-        val useXrayTun = prefs.useXrayTun && !prefs.disableVpn
         return OkHttpClient.Builder().apply {
             when {
-                serviceActive && useXrayTun ->
+                serviceActive && prefs.isXrayTunActive ->
                     socketFactory(ProtectedSocketFactory())
                 serviceActive ->
                     proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort)))

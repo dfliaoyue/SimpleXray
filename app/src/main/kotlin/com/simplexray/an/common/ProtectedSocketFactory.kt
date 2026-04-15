@@ -20,6 +20,10 @@ class ProtectedSocketFactory(
     private val delegate: SocketFactory = getDefault()
 ) : SocketFactory() {
 
+    /**
+     * Protect [socket] and return it.  If [delegate]'s `createSocket` throws, this method
+     * never runs and the exception propagates normally – there is no socket to protect.
+     */
     private fun protect(socket: Socket): Socket {
         TProxyService.protectSocket(socket)
         return socket

@@ -493,8 +493,11 @@ class TProxyService : VpnService() {
 
         /**
          * Calls [VpnService.protect] on [socket] so its traffic bypasses the TUN tunnel and
-         * reaches the real network directly.  Returns true on success, false when the VPN service
-         * is not currently running (in which case no protection is needed).
+         * reaches the real network directly.
+         *
+         * Returns `true` if the service is running and the socket was successfully protected.
+         * Returns `false` when the service is **not** running – this is not an error: when no
+         * VPN tunnel is active, all sockets already reach the real network without protection.
          */
         fun protectSocket(socket: Socket): Boolean = instance?.get()?.protect(socket) ?: false
 
