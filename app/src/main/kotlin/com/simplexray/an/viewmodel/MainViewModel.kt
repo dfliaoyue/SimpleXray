@@ -58,6 +58,7 @@ import java.net.Socket
 import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
+import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val TAG = "MainViewModel"
@@ -829,31 +830,58 @@ class MainViewModel(application: Application) :
     fun testConnectivity() {
         viewModelScope.launch(Dispatchers.IO) {
             val prefs = prefs
-            val targetUrl = prefs.connectivityTestTarget
-            val timeoutMs = prefs.connectivityTestTimeout.toLong()
-
-            // Validate URL before attempting connection.
+            val url: URL
             try {
-                Request.Builder().url(targetUrl).head().build()
+                url = URL(prefs.connectivityTestTarget)
             } catch (e: Exception) {
                 _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_invalid_url)))
                 return@launch
             }
 
-            suspend fun doTest(client: OkHttpClient) {
+            val host = url.host
+            val urlPort = if (url.port > 0) url.port else url.defaultPort
+            val path = if (url.path.isNullOrEmpty()) "/" else url.path
+            val isHttps = url.protocol == "https"
+            val timeout = prefs.connectivityTestTimeout
+
+            fun doTest(proxy: Proxy) {
+                val start = System.currentTimeMillis()
                 try {
-                    val request = Request.Builder().url(targetUrl).head().build()
-                    val start = System.currentTimeMillis()
-                    val response = client.newCall(request).await()
-                    val latency = System.currentTimeMillis() - start
-                    response.close()
-                    _uiEvent.trySend(
-                        MainViewUiEvent.ShowSnackbar(
-                            application.getString(R.string.connectivity_test_latency, latency.toInt())
-                        )
-                    )
+                    Socket(proxy).use { socket ->
+                        socket.soTimeout = timeout
+                        socket.connect(InetSocketAddress(host, urlPort), timeout)
+                        val (writer, reader) = if (isHttps) {
+                            val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                                .createSocket(socket, host, urlPort, true) as javax.net.ssl.SSLSocket
+                            sslSocket.startHandshake()
+                            Pair(
+                                sslSocket.outputStream.bufferedWriter(),
+                                sslSocket.inputStream.bufferedReader()
+                            )
+                        } else {
+                            Pair(
+                                socket.getOutputStream().bufferedWriter(),
+                                socket.getInputStream().bufferedReader()
+                            )
+                        }
+                        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n")
+                        writer.flush()
+                        val firstLine = reader.readLine()
+                        val latency = System.currentTimeMillis() - start
+                        if (firstLine != null && firstLine.startsWith("HTTP/")) {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(
+                                    application.getString(R.string.connectivity_test_latency, latency.toInt())
+                                )
+                            )
+                        } else {
+                            _uiEvent.trySend(
+                                MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
+                            )
+                        }
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Connectivity test failed for $targetUrl", e)
+                    Log.e(TAG, "Connectivity test failed for ${prefs.connectivityTestTarget}", e)
                     _uiEvent.trySend(
                         MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
                     )
@@ -862,35 +890,25 @@ class MainViewModel(application: Application) :
 
             if (_isServiceEnabled.value && prefs.isXrayTunActive) {
                 // In Xray TUN mode the app is excluded from VPN routing.  Inject a temporary
-                // SOCKS5 inbound so the test goes through the proxy chain.
-                // Use a generous connect timeout so the full SOCKS proxy chain (including the
-                // time the proxy needs to connect to the target) has enough time to complete.
-                // The user-configured timeout applies to the read phase only.
+                // SOCKS5 inbound so the test goes through the proxy chain, then use a raw
+                // Socket (same as the other modes) to perform the HTTP request through it.
                 try {
-                    withTempSocksProxiedClient(
-                        connectTimeoutMs = TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS,
-                        readTimeoutMs = timeoutMs
-                    ) { client -> doTest(client) }
+                    val (address, socksPort) = ensureTempSocksReady()
+                    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(address, socksPort))
+                    try {
+                        doTest(proxy)
+                    } finally {
+                        decrementAndCleanupIfNeeded()
+                    }
                 } catch (e: Exception) {
+                    Log.e(TAG, "Failed to set up temporary proxy for connectivity test", e)
                     _uiEvent.trySend(
                         MainViewUiEvent.ShowSnackbar(application.getString(R.string.connectivity_test_failed))
                     )
                 }
             } else {
-                val proxy = if (_isServiceEnabled.value) {
-                    // Use 127.0.0.1 explicitly: prefs.socksAddress may be "0.0.0.0" (a valid
-                    // bind address for Xray) which is not a valid connect destination on Android.
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", prefs.socksPort))
-                } else {
-                    null
-                }
-                val client = OkHttpClient.Builder().apply {
-                    proxy?.let { proxy(it) }
-                    // Allow the SOCKS connection (including proxy→target leg) sufficient time.
-                    connectTimeout(TEMP_SOCKS_NO_TRAFFIC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                    readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                }.build()
-                doTest(client)
+                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort))
+                doTest(proxy)
             }
         }
     }
