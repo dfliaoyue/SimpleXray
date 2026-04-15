@@ -10,16 +10,16 @@
  * (CHILD_TUN_FD = 4) *before* exec().  dup2() does not copy FD_CLOEXEC, so fd
  * 4 survives exec and is visible to Xray as its TUN fd.
  *
- * The function also creates stdin / stdout pipes so that the caller can write
- * the Xray config JSON to stdin and read Xray log output from stdout, exactly
- * mirroring the existing ProcessBuilder-based code path.
+ * Xray is started with "-confdir <conf_dir>" so it picks up multiple JSON
+ * config fragments from that directory.  A stdout pipe is created so the caller
+ * can read Xray log output; no stdin pipe is needed because the config is read
+ * from files rather than from stdin.
  *
  * JNI signature:
  *   int[] TProxyService.nativeSpawnXray(
- *       String xrayPath, String assetDir, int vpnFd)
+ *       String xrayPath, String assetDir, int vpnFd, String confDir)
  *
- * Returns int[3] = { pid, stdout_read_fd, stdin_write_fd } on success, or null
- * on failure.
+ * Returns int[2] = { pid, stdout_read_fd } on success, or null on failure.
  */
 
 #include <jni.h>
@@ -91,22 +91,21 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
         JNIEnv *env, jclass clazz,
         jstring xray_path_j,
         jstring asset_dir_j,
-        jint    vpn_fd)
+        jint    vpn_fd,
+        jstring conf_dir_j)
 {
     const char *xray_path = (*env)->GetStringUTFChars(env, xray_path_j, NULL);
     const char *asset_dir = (*env)->GetStringUTFChars(env, asset_dir_j,  NULL);
+    const char *conf_dir  = (*env)->GetStringUTFChars(env, conf_dir_j,   NULL);
 
-    /* stdin pipe:  parent writes config → child reads  (stdin_pipe[0] = read end) */
-    /* stdout pipe: child writes logs   → parent reads  (stdout_pipe[0] = read end) */
-    int stdin_pipe[2]  = {-1, -1};
+    /* stdout pipe: child writes logs → parent reads  (stdout_pipe[0] = read end) */
     int stdout_pipe[2] = {-1, -1};
 
-    if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0) {
+    if (pipe(stdout_pipe) < 0) {
         LOGE("pipe() failed: %s", strerror(errno));
-        if (stdin_pipe[0]  >= 0) { close(stdin_pipe[0]);  close(stdin_pipe[1]);  }
-        if (stdout_pipe[0] >= 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
         (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
         (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
+        (*env)->ReleaseStringUTFChars(env, conf_dir_j,   conf_dir);
         return NULL;
     }
 
@@ -124,10 +123,10 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     char **new_env = (char **)malloc((size_t)(parent_ec + 3) * sizeof(char *));
     if (!new_env) {
         LOGE("malloc failed for new_env");
-        close(stdin_pipe[0]);  close(stdin_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
         (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
+        (*env)->ReleaseStringUTFChars(env, conf_dir_j,   conf_dir);
         return NULL;
     }
     int ni = 0;
@@ -140,18 +139,18 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     new_env[ni++] = tun_fd_env;
     new_env[ni]   = NULL;
 
-    /* argv: just the binary path – Xray reads config from stdin when no -config
-     * argument is given, matching the existing ProcessBuilder code path. */
-    char *argv[] = { (char *)xray_path, NULL };
+    /* argv: xray_path -confdir <conf_dir>
+     * Xray loads all *.json files from the conf_dir in alphabetical order. */
+    char *argv[] = { (char *)xray_path, "-confdir", (char *)conf_dir, NULL };
 
     pid_t pid = fork();
     if (pid < 0) {
         LOGE("fork() failed: %s", strerror(errno));
         free(new_env);
-        close(stdin_pipe[0]);  close(stdin_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
         (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
+        (*env)->ReleaseStringUTFChars(env, conf_dir_j,   conf_dir);
         return NULL;
     }
 
@@ -161,16 +160,11 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
         /* Send SIGKILL to this process if the parent dies. */
         prctl(PR_SET_PDEATHSIG, SIGKILL);
 
-        /* stdin ← read end of stdin pipe */
-        dup2(stdin_pipe[0], STDIN_FILENO);
-
         /* stdout + stderr → write end of stdout pipe */
         dup2(stdout_pipe[1], STDOUT_FILENO);
         dup2(stdout_pipe[1], STDERR_FILENO);
 
-        /* Close the original pipe ends (already dup2'd to 0/1/2). */
-        close(stdin_pipe[0]);
-        close(stdin_pipe[1]);
+        /* Close the original pipe ends (already dup2'd to 1/2). */
         close(stdout_pipe[0]);
         close(stdout_pipe[1]);
 
@@ -192,24 +186,22 @@ Java_com_simplexray_an_service_TProxyService_nativeSpawnXray(
     /* ===== PARENT PROCESS ===== */
     free(new_env);
 
-    /* Close the ends that belong to the child. */
-    close(stdin_pipe[0]);   /* child reads from this; parent must not keep it */
+    /* Close the end that belongs to the child. */
     close(stdout_pipe[1]);  /* child writes to this;  parent must not keep it */
 
     (*env)->ReleaseStringUTFChars(env, xray_path_j, xray_path);
     (*env)->ReleaseStringUTFChars(env, asset_dir_j,  asset_dir);
+    (*env)->ReleaseStringUTFChars(env, conf_dir_j,   conf_dir);
 
-    LOGI("Spawned xray pid=%d stdin_write_fd=%d stdout_read_fd=%d",
-         pid, stdin_pipe[1], stdout_pipe[0]);
+    LOGI("Spawned xray pid=%d stdout_read_fd=%d", pid, stdout_pipe[0]);
 
-    /* Return { pid, stdout_read_fd, stdin_write_fd } */
-    jintArray result = (*env)->NewIntArray(env, 3);
+    /* Return { pid, stdout_read_fd } */
+    jintArray result = (*env)->NewIntArray(env, 2);
     if (!result) {
-        close(stdin_pipe[1]);
         close(stdout_pipe[0]);
         return NULL;
     }
-    jint arr[3] = { (jint)pid, (jint)stdout_pipe[0], (jint)stdin_pipe[1] };
-    (*env)->SetIntArrayRegion(env, result, 0, 3, arr);
+    jint arr[2] = { (jint)pid, (jint)stdout_pipe[0] };
+    (*env)->SetIntArrayRegion(env, result, 0, 2, arr);
     return result;
 }

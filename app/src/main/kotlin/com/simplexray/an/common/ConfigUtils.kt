@@ -44,9 +44,7 @@ object ConfigUtils {
     }
 
     @Throws(JSONException::class)
-    fun injectStatsService(prefs: Preferences, configContent: String): String {
-        val jsonObject = JSONObject(configContent)
-
+    fun buildApiConfigFragment(prefs: Preferences): String {
         val apiObject = JSONObject()
         apiObject.put("tag", "api")
         apiObject.put("listen", "${prefs.apiAddress}:${prefs.apiPort}")
@@ -54,18 +52,17 @@ object ConfigUtils {
         servicesArray.put("StatsService")
         apiObject.put("services", servicesArray)
 
-        jsonObject.put("api", apiObject)
-        jsonObject.put("stats", JSONObject())
-
         val policyObject = JSONObject()
         val systemObject = JSONObject()
         systemObject.put("statsOutboundUplink", true)
         systemObject.put("statsOutboundDownlink", true)
         policyObject.put("system", systemObject)
 
-        jsonObject.put("policy", policyObject)
-
-        return jsonObject.toString(2)
+        val root = JSONObject()
+        root.put("api", apiObject)
+        root.put("stats", JSONObject())
+        root.put("policy", policyObject)
+        return root.toString(2)
     }
 
     fun extractPortsFromJson(jsonContent: String): Set<Int> {
@@ -107,15 +104,17 @@ object ConfigUtils {
 
     /**
      * Builds a minimal Xray JSON config fragment containing a single SOCKS5 inbound
-     * bound to 127.0.0.1 with password authentication.  This fragment is written to
-     * [TEMP_SOCKS_CONFIG_FILENAME] and merged into the running config by [TProxyService]
-     * whenever Xray TUN mode is active and a network task (rule-file download, update check)
-     * needs to reach the internet through the proxy chain.
+     * bound to [listenAddress] (a random 127.x.x.x address) with password authentication.
+     * This fragment is written to [TEMP_SOCKS_CONFIG_FILENAME] in the app's private
+     * files directory and copied into the xray run-config directory by [TProxyService]
+     * whenever Xray TUN mode is active and a network task (rule-file download, update
+     * check, connectivity test) needs to reach the internet through the proxy chain.
      *
-     * The resulting JSON is **not** a complete Xray config – it only contains the
+     * The resulting JSON is a valid Xray multi-config fragment – it only contains the
      * `"inbounds"` array with the single temporary inbound.
      */
     fun buildTempSocksConfigJson(
+        listenAddress: String,
         port: Int,
         tag: String,
         username: String,
@@ -136,7 +135,7 @@ object ConfigUtils {
         val inbound = JSONObject()
         inbound.put("tag", tag)
         inbound.put("port", port)
-        inbound.put("listen", "127.0.0.1")
+        inbound.put("listen", listenAddress)
         inbound.put("protocol", "socks")
         inbound.put("settings", settings)
 
@@ -146,29 +145,6 @@ object ConfigUtils {
         val root = JSONObject()
         root.put("inbounds", inboundsArray)
         return root.toString(2)
-    }
-
-    /**
-     * Merges the `"inbounds"` array from [additionalConfig] into [baseConfig].
-     * All other top-level keys in [additionalConfig] are ignored – only inbound
-     * entries are appended to the base config's inbounds list.
-     *
-     * Returns [baseConfig] unchanged if [additionalConfig] contains no inbounds.
-     *
-     * @throws JSONException if either config string is not valid JSON.
-     */
-    @Throws(JSONException::class)
-    fun mergeAdditionalInbounds(baseConfig: String, additionalConfig: String): String {
-        val base = JSONObject(baseConfig)
-        val additional = JSONObject(additionalConfig)
-        val additionalInbounds = additional.optJSONArray("inbounds")
-            ?: return baseConfig
-        val baseInbounds = base.optJSONArray("inbounds") ?: org.json.JSONArray()
-        for (i in 0 until additionalInbounds.length()) {
-            baseInbounds.put(additionalInbounds.get(i))
-        }
-        base.put("inbounds", baseInbounds)
-        return base.toString(2)
     }
 }
 
