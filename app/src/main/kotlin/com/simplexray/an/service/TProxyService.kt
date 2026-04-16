@@ -398,7 +398,9 @@ class TProxyService : VpnService() {
         setBlocking(false)
         setMtu(mtu)
 
-        setMetered(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            setMetered(false)
+        }
 
         if (prefs.bypassLan) {
             addRoute("10.0.0.0", 8)

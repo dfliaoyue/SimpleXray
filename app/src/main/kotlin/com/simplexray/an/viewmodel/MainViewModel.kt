@@ -9,9 +9,9 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -909,16 +909,29 @@ class MainViewModel(application: Application) :
 
     fun registerTProxyServiceReceivers() {
         val application = application
-        ContextCompat.registerReceiver(
-            application, startReceiver,
-            IntentFilter(TProxyService.ACTION_START),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        ContextCompat.registerReceiver(
-            application, stopReceiver,
-            IntentFilter(TProxyService.ACTION_STOP),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        val startSuccessFilter = IntentFilter(TProxyService.ACTION_START)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            application.registerReceiver(
+                startReceiver,
+                startSuccessFilter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            application.registerReceiver(startReceiver, startSuccessFilter)
+        }
+
+        val stopSuccessFilter = IntentFilter(TProxyService.ACTION_STOP)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            application.registerReceiver(
+                stopReceiver,
+                stopSuccessFilter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            application.registerReceiver(stopReceiver, stopSuccessFilter)
+        }
         Log.d(TAG, "TProxyService receivers registered.")
     }
 
