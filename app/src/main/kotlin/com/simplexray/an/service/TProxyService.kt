@@ -39,8 +39,6 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.io.InterruptedIOException
 import java.net.ServerSocket
-import java.net.Socket
-import java.lang.ref.WeakReference
 import kotlin.concurrent.Volatile
 import kotlin.system.exitProcess
 
@@ -112,7 +110,6 @@ class TProxyService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = WeakReference(this)
         logFileManager = LogFileManager(this)
         Log.d(TAG, "TProxyService created.")
     }
@@ -178,7 +175,6 @@ class TProxyService : VpnService() {
     }
 
     override fun onDestroy() {
-        instance = null
         super.onDestroy()
         handler.removeCallbacks(broadcastLogsRunnable)
         broadcastLogsRunnable.run()
@@ -432,7 +428,8 @@ class TProxyService : VpnService() {
                 }
             }
         }
-        addDisallowedApplication(BuildConfig.APPLICATION_ID)
+        if (prefs.bypassSelectedApps || prefs.apps.isNullOrEmpty())
+            addDisallowedApplication(BuildConfig.APPLICATION_ID)
     }
 
     private fun stopService() {
@@ -494,11 +491,6 @@ class TProxyService : VpnService() {
         const val EXTRA_TEMP_SOCKS_CONFIG: String = "temp_socks_config"
         private const val TAG = "VpnService"
         private const val BROADCAST_DELAY_MS: Long = 3000
-
-        @Volatile
-        private var instance: WeakReference<TProxyService>? = null
-
-        fun protectSocket(socket: Socket): Boolean = instance?.get()?.protect(socket) ?: false
 
         init {
             System.loadLibrary("hev-socks5-tunnel")
