@@ -25,7 +25,6 @@
 #include <jni.h>
 
 #include <android/log.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -42,48 +41,17 @@
 #define CHILD_TUN_FD 4
 
 /*
- * Close every open fd > 2 except keep_fd.  We enumerate /proc/self/fd so that
- * we do not have to guess the upper bound, and we collect all candidates before
- * closing any of them to avoid invalidating the directory stream mid-walk.
- * This also closes the original vpn_fd position once it has been dup2'd to
- * CHILD_TUN_FD, so no fd leaks occur.
+ * Close every open fd > 2 except keep_fd.  Uses only async-signal-safe
+ * syscalls (no malloc, no opendir) so it is safe to call after fork() in a
+ * multi-threaded process.
  */
 static void close_extra_fds(int keep_fd)
 {
-    /* 256 open fds is far more than a freshly-forked Android child will have. */
-    static const int MAX_FDS = 256;
-    int   *fds = (int *)malloc((size_t)MAX_FDS * sizeof(int));
-    int    n   = 0;
-    DIR   *dir = opendir("/proc/self/fd");
-
-    if (!fds) {
-        if (dir) closedir(dir);
-        return;
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd <= 0 || max_fd > 65536) max_fd = 1024;
+    for (int fd = 3; fd < (int)max_fd; fd++) {
+        if (fd != keep_fd) close(fd);
     }
-
-    if (!dir) {
-        /* Fallback: brute-force close a reasonable range. */
-        long max = sysconf(_SC_OPEN_MAX);
-        if (max <= 0 || max > 65536) max = 1024;
-        for (int i = 3; i < (int)max; i++) {
-            if (i != keep_fd) close(i);
-        }
-        free(fds);
-        return;
-    }
-
-    int dir_fd = dirfd(dir);
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL && n < MAX_FDS) {
-        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
-        int fd = atoi(entry->d_name);
-        if (fd > 2 && fd != keep_fd && fd != dir_fd)
-            fds[n++] = fd;
-    }
-    closedir(dir);
-
-    for (int i = 0; i < n; i++) close(fds[i]);
-    free(fds);
 }
 
 JNIEXPORT jintArray JNICALL
