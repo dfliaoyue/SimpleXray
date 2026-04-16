@@ -5,8 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -95,13 +95,11 @@ class LogViewModel(application: Application) :
     }
 
     fun registerLogReceiver(context: Context) {
-        val filter = IntentFilter(TProxyService.ACTION_LOG_UPDATE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(logUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            context.registerReceiver(logUpdateReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            context, logUpdateReceiver,
+            IntentFilter(TProxyService.ACTION_LOG_UPDATE),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         Log.d(TAG, "Log receiver registered.")
     }
 
