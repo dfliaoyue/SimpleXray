@@ -37,23 +37,6 @@ class LogFileManager(context: Context) {
         }
     }
 
-    @Synchronized
-    fun appendLogs(logEntries: List<String>) {
-        if (logEntries.isEmpty()) return
-        try {
-            FileWriter(logFile, true).buffered().use { writer ->
-                for (entry in logEntries) {
-                    writer.write(entry)
-                    writer.newLine()
-                }
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Error appending logs to file", e)
-        } finally {
-            checkAndTruncateLogFile()
-        }
-    }
-
     fun readLogs(): String? {
         val logContent = StringBuilder()
         if (!logFile.exists()) {
