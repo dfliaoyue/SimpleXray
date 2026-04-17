@@ -24,18 +24,7 @@ class LogFileManager(context: Context) {
     @Synchronized
     fun appendLog(logEntry: String?) {
         if (logEntry == null) return
-        try {
-            BufferedWriter(FileWriter(logFile, true)).use { bw ->
-                bw.write(logEntry)
-                bw.newLine()
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Error appending log to file", e)
-        }
-        if (++writeCount >= TRUNCATE_CHECK_INTERVAL) {
-            writeCount = 0
-            checkAndTruncateLogFile()
-        }
+        appendLogs(listOf(logEntry))
     }
 
     @Synchronized

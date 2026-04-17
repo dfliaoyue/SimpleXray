@@ -1,5 +1,7 @@
 package com.simplexray.an.ui.screens
 
+private const val KEYBOARD_OPEN_RESTORE_DELAY_MS = 50L
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,8 +36,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,16 +78,20 @@ fun ConfigEditScreen(
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val focusManager = LocalFocusManager.current
 
-    var savedScrollPosition by remember { mutableIntStateOf(0) }
-    LaunchedEffect(scrollState.value) {
+    // Track scroll position while keyboard is closed using a plain object to avoid
+    // triggering extra recompositions from state writes.
+    val savedScrollRef = remember { object { var position = 0 } }
+    SideEffect {
         if (!isKeyboardOpen) {
-            savedScrollPosition = scrollState.value
+            savedScrollRef.position = scrollState.value
         }
     }
+    // When the keyboard opens, restore the saved scroll position after the system's
+    // bringIntoView mechanism has had a chance to run (avoids resetting to line 0).
     LaunchedEffect(isKeyboardOpen) {
         if (isKeyboardOpen) {
-            kotlinx.coroutines.delay(50)
-            scrollState.scrollTo(savedScrollPosition)
+            kotlinx.coroutines.delay(KEYBOARD_OPEN_RESTORE_DELAY_MS)
+            scrollState.scrollTo(savedScrollRef.position)
         }
     }
     val shareLauncher = rememberLauncherForActivityResult(

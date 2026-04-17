@@ -7,6 +7,7 @@ import org.json.JSONObject
 
 object ConfigUtils {
     private const val TAG = "ConfigUtils"
+    private const val MAX_PORT_RANGE_SIZE = 1000
 
     fun extractTunMtu(configContent: String): Int? {
         try {
@@ -112,7 +113,13 @@ object ConfigUtils {
                         if (rangeMatch != null) {
                             val start = rangeMatch.groupValues[1].toIntOrNull() ?: 0
                             val end = rangeMatch.groupValues[2].toIntOrNull() ?: 0
-                            for (p in start..end) if (p in 1..65535) ports.add(p)
+                            if (end - start <= MAX_PORT_RANGE_SIZE) {
+                                for (p in start..end) if (p in 1..65535) ports.add(p)
+                            } else {
+                                // Range too large; add only the boundary ports to limit memory use
+                                if (start in 1..65535) ports.add(start)
+                                if (end in 1..65535) ports.add(end)
+                            }
                         } else {
                             value.trim().toIntOrNull()?.takeIf { it in 1..65535 }
                                 ?.let { ports.add(it) }
