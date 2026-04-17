@@ -7,6 +7,7 @@ import org.json.JSONObject
 
 object ConfigUtils {
     private const val TAG = "ConfigUtils"
+    private const val MAX_PORT_RANGE_SIZE = 1000
 
     fun extractTunMtu(configContent: String): Int? {
         try {
@@ -99,19 +100,35 @@ object ConfigUtils {
         return ports
     }
 
+    private val PORT_RANGE_REGEX = Regex("""^(\d+)-(\d+)$""")
+
     private fun extractPortsRecursive(jsonObject: JSONObject, ports: MutableSet<Int>) {
         for (key in jsonObject.keys()) {
-            when (val value = jsonObject.get(key)) {
-                is Int -> {
-                    if (value in 1..65535) {
-                        ports.add(value)
+            val value = jsonObject.get(key)
+            if (key.equals("port", ignoreCase = true)) {
+                when (value) {
+                    is Int -> if (value in 1..65535) ports.add(value)
+                    is String -> {
+                        val rangeMatch = PORT_RANGE_REGEX.matchEntire(value.trim())
+                        if (rangeMatch != null) {
+                            val start = rangeMatch.groupValues[1].toIntOrNull() ?: 0
+                            val end = rangeMatch.groupValues[2].toIntOrNull() ?: 0
+                            if (end - start <= MAX_PORT_RANGE_SIZE) {
+                                for (p in start..end) if (p in 1..65535) ports.add(p)
+                            } else {
+                                Log.w(TAG, "Port range $start-$end exceeds MAX_PORT_RANGE_SIZE ($MAX_PORT_RANGE_SIZE); only boundary ports added")
+                                if (start in 1..65535) ports.add(start)
+                                if (end in 1..65535) ports.add(end)
+                            }
+                        } else {
+                            value.trim().toIntOrNull()?.takeIf { it in 1..65535 }
+                                ?.let { ports.add(it) }
+                        }
                     }
                 }
-
-                is JSONObject -> {
-                    extractPortsRecursive(value, ports)
-                }
-
+            }
+            when (value) {
+                is JSONObject -> extractPortsRecursive(value, ports)
                 is org.json.JSONArray -> {
                     for (i in 0 until value.length()) {
                         val item = value.get(i)

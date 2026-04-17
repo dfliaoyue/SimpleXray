@@ -125,4 +125,8 @@
     <string name="socks_user">"Pengguna SOCKS "</string>
     <string name="use_xray_tun_title">Gunakan Xray TUN</string>
     <string name="use_xray_tun_summary">Saat diaktifkan, inbound TUN bawaan Xray digunakan sebagai pengganti hev-socks5-tunnel.</string>
+    <string name="refresh">Segarkan</string>
+    <string name="save_to_file">Simpan ke File</string>
+    <string name="log_saved">Log disimpan</string>
+    <string name="log_save_failed">Gagal menyimpan log</string>
 </resources>

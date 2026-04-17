@@ -125,4 +125,8 @@
     <string name="socks_user">SOCKS 用户</string>
     <string name="use_xray_tun_title">使用 Xray TUN</string>
     <string name="use_xray_tun_summary">启用时，使用 Xray 内置 TUN 入站，而非 hev-socks5-tunnel。</string>
+    <string name="refresh">刷新</string>
+    <string name="save_to_file">保存到文件</string>
+    <string name="log_saved">日志已保存</string>
+    <string name="log_save_failed">保存日志失败</string>
 </resources>

@@ -3,16 +3,17 @@ package com.simplexray.an.data.source
 import android.content.Context
 import android.util.Log
 import java.io.BufferedReader
+import java.io.BufferedWriter
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileReader
 import java.io.FileWriter
 import java.io.IOException
-import java.io.PrintWriter
 import java.io.RandomAccessFile
 
 class LogFileManager(context: Context) {
     val logFile: File
+    private var writeCount = 0
 
     init {
         val filesDir = context.filesDir
@@ -22,34 +23,26 @@ class LogFileManager(context: Context) {
 
     @Synchronized
     fun appendLog(logEntry: String?) {
-        try {
-            FileWriter(logFile, true).use { fileWriter ->
-                PrintWriter(fileWriter).use { printWriter ->
-                    if (logEntry != null) {
-                        printWriter.println(logEntry)
-                    }
-                }
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Error appending log to file", e)
-        } finally {
-            checkAndTruncateLogFile()
-        }
+        if (logEntry == null) return
+        appendLogs(listOf(logEntry))
     }
 
     @Synchronized
-    fun appendLogs(logEntries: List<String>) {
-        if (logEntries.isEmpty()) return
+    fun appendLogs(lines: List<String>) {
+        if (lines.isEmpty()) return
         try {
-            FileWriter(logFile, true).buffered().use { writer ->
-                for (entry in logEntries) {
-                    writer.write(entry)
-                    writer.newLine()
+            BufferedWriter(FileWriter(logFile, true)).use { bw ->
+                for (line in lines) {
+                    bw.write(line)
+                    bw.newLine()
                 }
             }
         } catch (e: IOException) {
             Log.e(TAG, "Error appending logs to file", e)
-        } finally {
+        }
+        writeCount += lines.size
+        if (writeCount >= TRUNCATE_CHECK_INTERVAL) {
+            writeCount = 0
             checkAndTruncateLogFile()
         }
     }
@@ -78,6 +71,7 @@ class LogFileManager(context: Context) {
 
     @Synchronized
     fun clearLogs() {
+        writeCount = 0
         if (logFile.exists()) {
             try {
                 FileWriter(logFile, false).use { fileWriter ->
@@ -164,5 +158,6 @@ class LogFileManager(context: Context) {
         private const val LOG_FILE_NAME = "app_log.txt"
         private const val MAX_LOG_SIZE_BYTES = (10 * 1024 * 1024).toLong()
         private const val TRUNCATE_SIZE_BYTES = (5 * 1024 * 1024).toLong()
+        private const val TRUNCATE_CHECK_INTERVAL = 500
     }
 }
