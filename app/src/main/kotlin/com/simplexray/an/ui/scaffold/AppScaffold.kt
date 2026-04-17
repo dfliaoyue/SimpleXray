@@ -1,12 +1,16 @@
 package com.simplexray.an.ui.scaffold
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,8 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -59,7 +65,6 @@ fun AppScaffold(
     logViewModel: LogViewModel,
     onCreateNewConfigFileAndEdit: () -> Unit,
     onImportConfigFromClipboard: () -> Unit,
-    onPerformExport: () -> Unit,
     onPerformBackup: () -> Unit,
     onPerformRestore: () -> Unit,
     onSwitchVpnService: () -> Unit,
@@ -73,6 +78,14 @@ fun AppScaffold(
     var isLogSearching by remember { mutableStateOf(false) }
     val logSearchQuery by logViewModel.searchQuery.collectAsState()
     val focusRequester = remember { FocusRequester() }
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsState()
+
+    LaunchedEffect(selectionAnchor) {
+        if (selectionAnchor != null && isLogSearching) {
+            isLogSearching = false
+            logViewModel.onSearchQueryChange("")
+        }
+    }
 
     LaunchedEffect(isLogSearching) {
         if (isLogSearching) {
@@ -88,7 +101,6 @@ fun AppScaffold(
                 currentRoute,
                 onCreateNewConfigFileAndEdit,
                 onImportConfigFromClipboard,
-                onPerformExport,
                 onPerformBackup,
                 onPerformRestore,
                 onSwitchVpnService,
@@ -121,7 +133,6 @@ fun AppTopAppBar(
     currentRoute: String?,
     onCreateNewConfigFileAndEdit: () -> Unit,
     onImportConfigFromClipboard: () -> Unit,
-    onPerformExport: () -> Unit,
     onPerformBackup: () -> Unit,
     onPerformRestore: () -> Unit,
     onSwitchVpnService: () -> Unit,
@@ -228,7 +239,6 @@ fun AppTopAppBar(
                     currentRoute = currentRoute,
                     onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
                     onImportConfigFromClipboard = onImportConfigFromClipboard,
-                    onPerformExport = onPerformExport,
                     onPerformBackup = onPerformBackup,
                     onPerformRestore = onPerformRestore,
                     onSwitchVpnService = onSwitchVpnService,
@@ -249,7 +259,6 @@ private fun TopAppBarActions(
     currentRoute: String?,
     onCreateNewConfigFileAndEdit: () -> Unit,
     onImportConfigFromClipboard: () -> Unit,
-    onPerformExport: () -> Unit,
     onPerformBackup: () -> Unit,
     onPerformRestore: () -> Unit,
     onSwitchVpnService: () -> Unit,
@@ -277,7 +286,6 @@ private fun TopAppBarActions(
         )
 
         "log" -> LogActions(
-            onPerformExport = onPerformExport,
             logViewModel = logViewModel,
             onLogSearchingChange = onLogSearchingChange
         )
@@ -354,37 +362,87 @@ private fun ConfigActions(
 
 @Composable
 private fun LogActions(
-    onPerformExport: () -> Unit,
     logViewModel: LogViewModel,
     onLogSearchingChange: (Boolean) -> Unit = {}
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsStateWithLifecycle()
+    val selectionEnd by logViewModel.selectionEnd.collectAsStateWithLifecycle()
+    val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val hasLogsToExport by logViewModel.hasLogsToExport.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
 
-    IconButton(onClick = { onLogSearchingChange(true) }) {
-        Icon(
-            painterResource(id = R.drawable.search),
-            contentDescription = stringResource(R.string.search)
-        )
+    val saveLogLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri != null) {
+            logViewModel.writeLogsToUri(uri)
+        }
     }
-    IconButton(onClick = { expanded = true }) {
-        Icon(
-            Icons.Default.MoreVert,
-            contentDescription = stringResource(R.string.more)
-        )
+    var expanded by remember { mutableStateOf(false) }
+
+    val selectionRange = remember(selectionAnchor, selectionEnd) {
+        val anchor = selectionAnchor
+        if (anchor == null) null
+        else {
+            val end = selectionEnd ?: anchor
+            minOf(anchor, end)..maxOf(anchor, end)
+        }
     }
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { expanded = false }
-    ) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.export)) },
-            onClick = {
-                onPerformExport()
-                expanded = false
-            },
-            enabled = hasLogsToExport
-        )
+
+    if (selectionAnchor != null) {
+        IconButton(onClick = { logViewModel.clearSelection() }) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = null
+            )
+        }
+        IconButton(onClick = {
+            val range = selectionRange
+            if (range != null) {
+                val text = (range.last downTo range.first)
+                    .mapNotNull { filteredEntries.getOrNull(it) }
+                    .joinToString("\n")
+                clipboardManager.setText(AnnotatedString(text))
+            }
+            logViewModel.clearSelection()
+        }) {
+            Icon(
+                painterResource(id = R.drawable.content_copy),
+                contentDescription = null
+            )
+        }
+    } else {
+        IconButton(onClick = { logViewModel.refreshLogs() }) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = stringResource(R.string.refresh)
+            )
+        }
+        IconButton(onClick = { onLogSearchingChange(true) }) {
+            Icon(
+                painterResource(id = R.drawable.search),
+                contentDescription = stringResource(R.string.search)
+            )
+        }
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = stringResource(R.string.more)
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.save_to_file)) },
+                onClick = {
+                    saveLogLauncher.launch("simplexray_log_${System.currentTimeMillis()}.txt")
+                    expanded = false
+                },
+                enabled = hasLogsToExport
+            )
+        }
     }
 }
 

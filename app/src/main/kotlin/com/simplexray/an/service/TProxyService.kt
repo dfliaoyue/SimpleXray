@@ -49,6 +49,7 @@ class TProxyService : VpnService() {
     private val broadcastLogsRunnable = Runnable {
         synchronized(logBroadcastBuffer) {
             if (logBroadcastBuffer.isNotEmpty()) {
+                logFileManager.appendLogs(ArrayList(logBroadcastBuffer))
                 val logUpdateIntent = Intent(ACTION_LOG_UPDATE)
                 logUpdateIntent.setPackage(application.packageName)
                 logUpdateIntent.putStringArrayListExtra(
@@ -283,7 +284,6 @@ class TProxyService : VpnService() {
             Log.d(TAG, "Reading xray process output.")
             var line = reader.readLine()
             while (line != null) {
-                logFileManager.appendLog(line)
                 synchronized(logBroadcastBuffer) {
                     logBroadcastBuffer.add(line)
                     if (!handler.hasCallbacks(broadcastLogsRunnable)) {
@@ -331,9 +331,6 @@ class TProxyService : VpnService() {
 
     private fun stopXray() {
         Log.d(TAG, "stopXray called")
-        serviceScope.cancel()
-        Log.d(TAG, "CoroutineScope cancelled.")
-
         killXrayProcess()
         Log.d(TAG, "Xray process killed.")
 

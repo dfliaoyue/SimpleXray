@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -15,18 +16,20 @@ import com.simplexray.an.data.source.LogFileManager
 import com.simplexray.an.service.TProxyService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Collections
 
 private const val TAG = "LogViewModel"
 
@@ -51,7 +54,15 @@ class LogViewModel(application: Application) :
     private val _hasLogsToExport = MutableStateFlow(false)
     val hasLogsToExport: StateFlow<Boolean> = _hasLogsToExport.asStateFlow()
 
-    private val logEntrySet: MutableSet<String> = Collections.synchronizedSet(HashSet())
+    private val _selectionAnchor = MutableStateFlow<Int?>(null)
+    val selectionAnchor: StateFlow<Int?> = _selectionAnchor.asStateFlow()
+
+    private val _selectionEnd = MutableStateFlow<Int?>(null)
+    val selectionEnd: StateFlow<Int?> = _selectionEnd.asStateFlow()
+
+    private val _saveResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val saveResult: SharedFlow<Boolean> = _saveResult.asSharedFlow()
+
     private val logMutex = Mutex()
 
     private var logUpdateReceiver: BroadcastReceiver
@@ -92,6 +103,9 @@ class LogViewModel(application: Application) :
                 .flowOn(Dispatchers.Default)
                 .collect { _filteredEntries.value = it }
         }
+        viewModelScope.launch {
+            searchQuery.drop(1).collect { clearSelection() }
+        }
     }
 
     fun registerLogReceiver(context: Context) {
@@ -112,6 +126,7 @@ class LogViewModel(application: Application) :
 
     fun loadLogs() {
         viewModelScope.launch(Dispatchers.IO) {
+            clearSelection()
             Log.d(TAG, "Loading logs.")
             val savedLogData = logFileManager.readLogs()
             val initialLogs = if (!savedLogData.isNullOrEmpty()) {
@@ -123,25 +138,28 @@ class LogViewModel(application: Application) :
         }
     }
 
+    /** Reload logs from the log file (manual refresh). */
+    fun refreshLogs() {
+        loadLogs()
+    }
+
     private suspend fun processInitialLogs(initialLogs: List<String>) {
         logMutex.withLock {
-            logEntrySet.clear()
-            _logEntries.value = initialLogs.filter { logEntrySet.add(it) }.reversed()
+            _logEntries.value = initialLogs.reversed()
         }
-        Log.d(TAG, "Processed initial logs: ${_logEntries.value.size} unique entries.")
+        Log.d(TAG, "Processed initial logs: ${_logEntries.value.size} entries.")
     }
 
     private suspend fun processNewLogs(newLogs: ArrayList<String>) {
-        val uniqueNewLogs = logMutex.withLock {
-            newLogs.filter { it.trim().isNotEmpty() && logEntrySet.add(it) }
+        if (_selectionAnchor.value != null) {
+            return
         }
-        if (uniqueNewLogs.isNotEmpty()) {
-            withContext(Dispatchers.Main) {
-                _logEntries.value = uniqueNewLogs + _logEntries.value
+        val nonEmptyLogs = newLogs.filter { it.trim().isNotEmpty() }
+        if (nonEmptyLogs.isNotEmpty()) {
+            logMutex.withLock {
+                _logEntries.value = nonEmptyLogs + _logEntries.value
             }
-            Log.d(TAG, "Added ${uniqueNewLogs.size} new unique log entries.")
-        } else {
-            Log.d(TAG, "No unique log entries from broadcast to add.")
+            Log.d(TAG, "Added ${nonEmptyLogs.size} new log entries.")
         }
     }
 
@@ -149,9 +167,38 @@ class LogViewModel(application: Application) :
         viewModelScope.launch {
             logMutex.withLock {
                 _logEntries.value = emptyList()
-                logEntrySet.clear()
             }
+            clearSelection()
             Log.d(TAG, "Logs cleared.")
+        }
+    }
+
+    fun onLogEntryClick(index: Int) {
+        if (_selectionAnchor.value == null) {
+            _selectionAnchor.value = index
+            _selectionEnd.value = index
+        } else {
+            _selectionEnd.value = index
+        }
+    }
+
+    fun clearSelection() {
+        _selectionAnchor.value = null
+        _selectionEnd.value = null
+    }
+
+    fun writeLogsToUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                getApplication<Application>().contentResolver.openOutputStream(uri)?.use { os ->
+                    val text = _logEntries.value.reversed().joinToString("\n")
+                    os.write(text.toByteArray(Charsets.UTF_8))
+                }
+                _saveResult.tryEmit(true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to write logs to URI", e)
+                _saveResult.tryEmit(false)
+            }
         }
     }
 
