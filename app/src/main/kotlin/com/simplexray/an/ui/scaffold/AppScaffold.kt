@@ -402,7 +402,9 @@ private fun LogActions(
         IconButton(onClick = {
             val range = selectionRange
             if (range != null) {
-                // Produce lines in chronological order (oldest = highest index in reversed list)
+                // filteredEntries uses reverseLayout=true so index 0 is the newest entry.
+                // Iterating from range.last down to range.first yields lines in
+                // chronological order (oldest → newest).
                 val text = (range.last downTo range.first)
                     .mapNotNull { filteredEntries.getOrNull(it) }
                     .joinToString("\n")

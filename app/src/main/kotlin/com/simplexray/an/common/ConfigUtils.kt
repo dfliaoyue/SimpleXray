@@ -117,6 +117,7 @@ object ConfigUtils {
                                 for (p in start..end) if (p in 1..65535) ports.add(p)
                             } else {
                                 // Range too large; add only the boundary ports to limit memory use
+                                Log.w(TAG, "Port range $start-$end exceeds MAX_PORT_RANGE_SIZE ($MAX_PORT_RANGE_SIZE); only boundary ports added")
                                 if (start in 1..65535) ports.add(start)
                                 if (end in 1..65535) ports.add(end)
                             }
