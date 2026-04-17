@@ -154,6 +154,12 @@ class LogViewModel(application: Application) :
     }
 
     private suspend fun processNewLogs(newLogs: ArrayList<String>) {
+        // Don't update the log list while the user has a selection active;
+        // index shifts would silently change which lines are highlighted.
+        if (_selectionAnchor.value != null) {
+            Log.d(TAG, "Skipping log update broadcast – selection mode active.")
+            return
+        }
         val nonEmptyLogs = newLogs.filter { it.trim().isNotEmpty() }
         if (nonEmptyLogs.isNotEmpty()) {
             logMutex.withLock {
@@ -178,23 +184,16 @@ class LogViewModel(application: Application) :
     /**
      * Called when the user taps a log entry at [index] in the current filtered list.
      *
-     * - First tap: sets anchor (start of selection).
-     * - Tapping the anchor again with no end: cancels selection.
-     * - Second tap on a different entry: sets end; selection is anchor..end range.
-     * - Tapping any entry while range is active: updates end.
+     * - First tap: immediately selects that single entry (anchor = end = index).
+     * - Subsequent taps: extend the selection to the new index; anchor stays fixed.
+     * - Cancel via [clearSelection].
      */
     fun onLogEntryClick(index: Int) {
-        when {
-            _selectionAnchor.value == null -> {
-                _selectionAnchor.value = index
-                _selectionEnd.value = null
-            }
-            _selectionEnd.value == null && _selectionAnchor.value == index -> {
-                _selectionAnchor.value = null
-            }
-            else -> {
-                _selectionEnd.value = index
-            }
+        if (_selectionAnchor.value == null) {
+            _selectionAnchor.value = index
+            _selectionEnd.value = index
+        } else {
+            _selectionEnd.value = index
         }
     }
 

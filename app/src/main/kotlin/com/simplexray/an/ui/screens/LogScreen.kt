@@ -3,20 +3,16 @@ package com.simplexray.an.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -26,10 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -53,7 +47,6 @@ fun LogScreen(
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val selectionAnchor by logViewModel.selectionAnchor.collectAsStateWithLifecycle()
     val selectionEnd by logViewModel.selectionEnd.collectAsStateWithLifecycle()
-    val clipboardManager = LocalClipboardManager.current
 
     val selectionRange = remember(selectionAnchor, selectionEnd) {
         val anchor = selectionAnchor
@@ -74,7 +67,7 @@ fun LogScreen(
         }
     }
 
-    // Show toast when save result arrives
+    // Show toast when save-to-file result arrives
     LaunchedEffect(Unit) {
         logViewModel.saveResult.collect { success ->
             Toast.makeText(
@@ -94,95 +87,37 @@ fun LogScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            if (filteredEntries.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        stringResource(R.string.no_log_entries),
-                        modifier = Modifier.fillMaxWidth(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            } else {
-                LazyColumnScrollbar(
+        if (filteredEntries.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    stringResource(R.string.no_log_entries),
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        } else {
+            LazyColumnScrollbar(
+                state = listState,
+                settings = ScrollbarDefaults.defaultScrollbarSettings()
+            ) {
+                LazyColumn(
                     state = listState,
-                    settings = ScrollbarDefaults.defaultScrollbarSettings()
+                    modifier = Modifier.padding(start = 6.dp, end = 6.dp),
+                    reverseLayout = true
                 ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.padding(start = 6.dp, end = 6.dp),
-                        reverseLayout = true
-                    ) {
-                        itemsIndexed(filteredEntries) { index, logEntry ->
-                            LogEntryItem(
-                                logEntry = logEntry,
-                                isSelected = selectionRange?.contains(index) == true,
-                                onClick = { logViewModel.onLogEntryClick(index) }
-                            )
-                        }
+                    itemsIndexed(filteredEntries) { index, logEntry ->
+                        LogEntryItem(
+                            logEntry = logEntry,
+                            isSelected = selectionRange?.contains(index) == true,
+                            onClick = { logViewModel.onLogEntryClick(index) }
+                        )
                     }
                 }
             }
-        }
-
-        // Selection action bar - shown when an anchor entry is active
-        if (selectionAnchor != null) {
-            LogSelectionActionBar(
-                selectionEnd = selectionEnd,
-                selectedCount = if (selectionRange != null)
-                    selectionRange.last - selectionRange.first + 1
-                else 1,
-                onCopy = {
-                    val range = selectionRange
-                    if (range != null) {
-                        // Copy in chronological order (oldest = highest index in reversed list)
-                        val text = (range.last downTo range.first)
-                            .mapNotNull { filteredEntries.getOrNull(it) }
-                            .joinToString("\n")
-                        clipboardManager.setText(AnnotatedString(text))
-                    }
-                    logViewModel.clearSelection()
-                },
-                onCancel = { logViewModel.clearSelection() }
-            )
-        }
-    }
-}
-
-@Composable
-private fun LogSelectionActionBar(
-    selectionEnd: Int?,
-    selectedCount: Int,
-    onCopy: () -> Unit,
-    onCancel: () -> Unit
-) {
-    HorizontalDivider()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = if (selectionEnd == null)
-                stringResource(R.string.log_selection_anchor_hint)
-            else
-                "$selectedCount entries",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f)
-        )
-        if (selectionEnd != null) {
-            TextButton(onClick = onCopy) {
-                Text(stringResource(R.string.copy_selected))
-            }
-        }
-        TextButton(onClick = onCancel) {
-            Text(stringResource(R.string.cancel))
         }
     }
 }
@@ -240,4 +175,5 @@ fun LogEntryItem(
             .padding(vertical = 2.dp)
     )
 }
+
 

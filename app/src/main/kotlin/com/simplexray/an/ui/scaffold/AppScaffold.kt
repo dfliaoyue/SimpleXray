@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
@@ -39,8 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -75,6 +78,15 @@ fun AppScaffold(
     var isLogSearching by remember { mutableStateOf(false) }
     val logSearchQuery by logViewModel.searchQuery.collectAsState()
     val focusRequester = remember { FocusRequester() }
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsState()
+
+    // Close search mode automatically when the user starts a log-entry selection
+    LaunchedEffect(selectionAnchor) {
+        if (selectionAnchor != null && isLogSearching) {
+            isLogSearching = false
+            logViewModel.onSearchQueryChange("")
+        }
+    }
 
     LaunchedEffect(isLogSearching) {
         if (isLogSearching) {
@@ -354,9 +366,13 @@ private fun LogActions(
     logViewModel: LogViewModel,
     onLogSearchingChange: (Boolean) -> Unit = {}
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsStateWithLifecycle()
+    val selectionEnd by logViewModel.selectionEnd.collectAsStateWithLifecycle()
+    val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val hasLogsToExport by logViewModel.hasLogsToExport.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
 
+    // Always remembered regardless of branch (Compose rule)
     val saveLogLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain")
     ) { uri ->
@@ -364,37 +380,74 @@ private fun LogActions(
             logViewModel.writeLogsToUri(uri)
         }
     }
+    var expanded by remember { mutableStateOf(false) }
 
-    IconButton(onClick = { logViewModel.refreshLogs() }) {
-        Icon(
-            Icons.Default.Refresh,
-            contentDescription = stringResource(R.string.refresh)
-        )
+    val selectionRange = remember(selectionAnchor, selectionEnd) {
+        val anchor = selectionAnchor
+        if (anchor == null) null
+        else {
+            val end = selectionEnd ?: anchor
+            minOf(anchor, end)..maxOf(anchor, end)
+        }
     }
-    IconButton(onClick = { onLogSearchingChange(true) }) {
-        Icon(
-            painterResource(id = R.drawable.search),
-            contentDescription = stringResource(R.string.search)
-        )
-    }
-    IconButton(onClick = { expanded = true }) {
-        Icon(
-            Icons.Default.MoreVert,
-            contentDescription = stringResource(R.string.more)
-        )
-    }
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { expanded = false }
-    ) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.save_to_file)) },
-            onClick = {
-                saveLogLauncher.launch("simplexray_log_${System.currentTimeMillis()}.txt")
-                expanded = false
-            },
-            enabled = hasLogsToExport
-        )
+
+    if (selectionAnchor != null) {
+        // Selection mode: ✕ cancel  +  copy icon
+        IconButton(onClick = { logViewModel.clearSelection() }) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = null
+            )
+        }
+        IconButton(onClick = {
+            val range = selectionRange
+            if (range != null) {
+                // Produce lines in chronological order (oldest = highest index in reversed list)
+                val text = (range.last downTo range.first)
+                    .mapNotNull { filteredEntries.getOrNull(it) }
+                    .joinToString("\n")
+                clipboardManager.setText(AnnotatedString(text))
+            }
+            logViewModel.clearSelection()
+        }) {
+            Icon(
+                painterResource(id = R.drawable.content_copy),
+                contentDescription = null
+            )
+        }
+    } else {
+        // Normal mode: refresh  +  search  +  more (save-to-file)
+        IconButton(onClick = { logViewModel.refreshLogs() }) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = stringResource(R.string.refresh)
+            )
+        }
+        IconButton(onClick = { onLogSearchingChange(true) }) {
+            Icon(
+                painterResource(id = R.drawable.search),
+                contentDescription = stringResource(R.string.search)
+            )
+        }
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = stringResource(R.string.more)
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.save_to_file)) },
+                onClick = {
+                    saveLogLauncher.launch("simplexray_log_${System.currentTimeMillis()}.txt")
+                    expanded = false
+                },
+                enabled = hasLogsToExport
+            )
+        }
     }
 }
 

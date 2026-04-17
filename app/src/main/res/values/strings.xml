@@ -131,9 +131,7 @@
     <string name="use_xray_tun_title">Use Xray TUN</string>
     <string name="use_xray_tun_summary">When enabled, Xray built-in TUN inbound is used instead of hev-socks5-tunnel.</string>
     <string name="refresh">Refresh</string>
-    <string name="copy_selected">Copy Selected</string>
     <string name="save_to_file">Save to File</string>
-    <string name="log_selection_anchor_hint">Tap another entry to select range</string>
     <string name="log_saved">Log saved</string>
     <string name="log_save_failed">Failed to save log</string>
 </resources>
