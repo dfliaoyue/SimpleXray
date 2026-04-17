@@ -80,7 +80,6 @@ fun AppScaffold(
     val focusRequester = remember { FocusRequester() }
     val selectionAnchor by logViewModel.selectionAnchor.collectAsState()
 
-    // Close search mode automatically when the user starts a log-entry selection
     LaunchedEffect(selectionAnchor) {
         if (selectionAnchor != null && isLogSearching) {
             isLogSearching = false
@@ -372,7 +371,6 @@ private fun LogActions(
     val hasLogsToExport by logViewModel.hasLogsToExport.collectAsStateWithLifecycle()
     val clipboardManager = LocalClipboardManager.current
 
-    // Always remembered regardless of branch (Compose rule)
     val saveLogLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain")
     ) { uri ->
@@ -392,7 +390,6 @@ private fun LogActions(
     }
 
     if (selectionAnchor != null) {
-        // Selection mode: ✕ cancel  +  copy icon
         IconButton(onClick = { logViewModel.clearSelection() }) {
             Icon(
                 Icons.Default.Close,
@@ -402,9 +399,6 @@ private fun LogActions(
         IconButton(onClick = {
             val range = selectionRange
             if (range != null) {
-                // filteredEntries uses reverseLayout=true so index 0 is the newest entry.
-                // Iterating from range.last down to range.first yields lines in
-                // chronological order (oldest → newest).
                 val text = (range.last downTo range.first)
                     .mapNotNull { filteredEntries.getOrNull(it) }
                     .joinToString("\n")
@@ -418,7 +412,6 @@ private fun LogActions(
             )
         }
     } else {
-        // Normal mode: refresh  +  search  +  more (save-to-file)
         IconButton(onClick = { logViewModel.refreshLogs() }) {
             Icon(
                 Icons.Default.Refresh,

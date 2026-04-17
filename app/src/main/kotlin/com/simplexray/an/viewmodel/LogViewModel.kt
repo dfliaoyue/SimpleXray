@@ -54,14 +54,12 @@ class LogViewModel(application: Application) :
     private val _hasLogsToExport = MutableStateFlow(false)
     val hasLogsToExport: StateFlow<Boolean> = _hasLogsToExport.asStateFlow()
 
-    // --- Selection state ---
     private val _selectionAnchor = MutableStateFlow<Int?>(null)
     val selectionAnchor: StateFlow<Int?> = _selectionAnchor.asStateFlow()
 
     private val _selectionEnd = MutableStateFlow<Int?>(null)
     val selectionEnd: StateFlow<Int?> = _selectionEnd.asStateFlow()
 
-    // --- Save result event ---
     private val _saveResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
     val saveResult: SharedFlow<Boolean> = _saveResult.asSharedFlow()
 
@@ -105,7 +103,6 @@ class LogViewModel(application: Application) :
                 .flowOn(Dispatchers.Default)
                 .collect { _filteredEntries.value = it }
         }
-        // Clear selection on subsequent search query changes (drop(1) skips the initial value)
         viewModelScope.launch {
             searchQuery.drop(1).collect { clearSelection() }
         }
@@ -154,10 +151,7 @@ class LogViewModel(application: Application) :
     }
 
     private suspend fun processNewLogs(newLogs: ArrayList<String>) {
-        // Don't update the log list while the user has a selection active;
-        // index shifts would silently change which lines are highlighted.
         if (_selectionAnchor.value != null) {
-            Log.d(TAG, "Skipping log update broadcast – selection mode active.")
             return
         }
         val nonEmptyLogs = newLogs.filter { it.trim().isNotEmpty() }
@@ -179,15 +173,6 @@ class LogViewModel(application: Application) :
         }
     }
 
-    // --- Selection logic ---
-
-    /**
-     * Called when the user taps a log entry at [index] in the current filtered list.
-     *
-     * - First tap: immediately selects that single entry (anchor = end = index).
-     * - Subsequent taps: extend the selection to the new index; anchor stays fixed.
-     * - Cancel via [clearSelection].
-     */
     fun onLogEntryClick(index: Int) {
         if (_selectionAnchor.value == null) {
             _selectionAnchor.value = index
@@ -202,12 +187,6 @@ class LogViewModel(application: Application) :
         _selectionEnd.value = null
     }
 
-    // --- Export ---
-
-    /**
-     * Writes all log entries (in chronological order, oldest first) to [uri].
-     * Emits `true` on success or `false` on failure via [saveResult].
-     */
     fun writeLogsToUri(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {

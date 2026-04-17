@@ -67,7 +67,6 @@ fun LogScreen(
         }
     }
 
-    // Show toast when save-to-file result arrives
     LaunchedEffect(Unit) {
         logViewModel.saveResult.collect { success ->
             Toast.makeText(
