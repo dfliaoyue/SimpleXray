@@ -36,8 +36,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -360,6 +362,8 @@ private fun LogActions(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val hasLogsToExport by logViewModel.hasLogsToExport.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
+    val logEntries by logViewModel.logEntries.collectAsStateWithLifecycle()
 
     IconButton(onClick = { onLogSearchingChange(true) }) {
         Icon(
@@ -377,6 +381,15 @@ private fun LogActions(
         expanded = expanded,
         onDismissRequest = { expanded = false }
     ) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.export_to_clipboard)) },
+            onClick = {
+                val logText = logEntries.reversed().joinToString("\n")
+                clipboardManager.setText(AnnotatedString(logText))
+                expanded = false
+            },
+            enabled = hasLogsToExport
+        )
         DropdownMenuItem(
             text = { Text(stringResource(R.string.export)) },
             onClick = {

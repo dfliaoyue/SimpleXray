@@ -24,9 +24,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Collections
 
 private const val TAG = "LogViewModel"
 
@@ -51,7 +49,6 @@ class LogViewModel(application: Application) :
     private val _hasLogsToExport = MutableStateFlow(false)
     val hasLogsToExport: StateFlow<Boolean> = _hasLogsToExport.asStateFlow()
 
-    private val logEntrySet: MutableSet<String> = Collections.synchronizedSet(HashSet())
     private val logMutex = Mutex()
 
     private var logUpdateReceiver: BroadcastReceiver
@@ -125,23 +122,18 @@ class LogViewModel(application: Application) :
 
     private suspend fun processInitialLogs(initialLogs: List<String>) {
         logMutex.withLock {
-            logEntrySet.clear()
-            _logEntries.value = initialLogs.filter { logEntrySet.add(it) }.reversed()
+            _logEntries.value = initialLogs.reversed()
         }
-        Log.d(TAG, "Processed initial logs: ${_logEntries.value.size} unique entries.")
+        Log.d(TAG, "Processed initial logs: ${_logEntries.value.size} entries.")
     }
 
     private suspend fun processNewLogs(newLogs: ArrayList<String>) {
-        val uniqueNewLogs = logMutex.withLock {
-            newLogs.filter { it.trim().isNotEmpty() && logEntrySet.add(it) }
-        }
-        if (uniqueNewLogs.isNotEmpty()) {
-            withContext(Dispatchers.Main) {
-                _logEntries.value = uniqueNewLogs + _logEntries.value
+        val nonEmptyLogs = newLogs.filter { it.trim().isNotEmpty() }
+        if (nonEmptyLogs.isNotEmpty()) {
+            logMutex.withLock {
+                _logEntries.value = nonEmptyLogs + _logEntries.value
             }
-            Log.d(TAG, "Added ${uniqueNewLogs.size} new unique log entries.")
-        } else {
-            Log.d(TAG, "No unique log entries from broadcast to add.")
+            Log.d(TAG, "Added ${nonEmptyLogs.size} new log entries.")
         }
     }
 
@@ -149,7 +141,6 @@ class LogViewModel(application: Application) :
         viewModelScope.launch {
             logMutex.withLock {
                 _logEntries.value = emptyList()
-                logEntrySet.clear()
             }
             Log.d(TAG, "Logs cleared.")
         }

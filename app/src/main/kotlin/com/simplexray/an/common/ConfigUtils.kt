@@ -99,19 +99,29 @@ object ConfigUtils {
         return ports
     }
 
+    private val PORT_RANGE_REGEX = Regex("""^(\d+)-(\d+)$""")
+
     private fun extractPortsRecursive(jsonObject: JSONObject, ports: MutableSet<Int>) {
         for (key in jsonObject.keys()) {
-            when (val value = jsonObject.get(key)) {
-                is Int -> {
-                    if (value in 1..65535) {
-                        ports.add(value)
+            val value = jsonObject.get(key)
+            if (key.equals("port", ignoreCase = true)) {
+                when (value) {
+                    is Int -> if (value in 1..65535) ports.add(value)
+                    is String -> {
+                        val rangeMatch = PORT_RANGE_REGEX.matchEntire(value.trim())
+                        if (rangeMatch != null) {
+                            val start = rangeMatch.groupValues[1].toIntOrNull() ?: 0
+                            val end = rangeMatch.groupValues[2].toIntOrNull() ?: 0
+                            for (p in start..end) if (p in 1..65535) ports.add(p)
+                        } else {
+                            value.trim().toIntOrNull()?.takeIf { it in 1..65535 }
+                                ?.let { ports.add(it) }
+                        }
                     }
                 }
-
-                is JSONObject -> {
-                    extractPortsRecursive(value, ports)
-                }
-
+            }
+            when (value) {
+                is JSONObject -> extractPortsRecursive(value, ports)
                 is org.json.JSONArray -> {
                     for (i in 0 until value.length()) {
                         val item = value.get(i)

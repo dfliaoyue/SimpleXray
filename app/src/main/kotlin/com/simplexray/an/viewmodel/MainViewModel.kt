@@ -1,6 +1,5 @@
 package com.simplexray.an.viewmodel
 
-import android.app.ActivityManager
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -207,7 +206,7 @@ class MainViewModel(application: Application) :
         setupGlobalSocksAuthenticator()
 
         viewModelScope.launch(Dispatchers.IO) {
-            _isServiceEnabled.value = isServiceRunning(application, TProxyService::class.java)
+            _isServiceEnabled.value = prefs.enable
 
             updateSettingsState()
             loadKernelVersion()
@@ -1387,15 +1386,6 @@ class MainViewModel(application: Application) :
         private const val IPV6_REGEX =
             "^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80::(fe80(:[0-9a-fA-F]{0,4})?){0,4}%[0-9a-zA-Z]+|::(ffff(:0{1,4})?:)?((25[0-5]|(2[0-4]|1?\\d)?\\d)\\.){3}(25[0-5]|(2[0-4]|1?\\d)?\\d)|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1?\\d)?\\d)\\.){3}(25[0-5]|(2[0-4]|1?\\d)?\\d))$"
         private val IPV6_PATTERN: Pattern = Pattern.compile(IPV6_REGEX)
-
-        @Suppress("DEPRECATION")
-        fun isServiceRunning(context: Context, serviceClass: Class<*>): Boolean {
-            val activityManager =
-                context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            return activityManager.getRunningServices(Int.MAX_VALUE).any { service ->
-                serviceClass.name == service.service.className
-            }
-        }
     }
 }
 

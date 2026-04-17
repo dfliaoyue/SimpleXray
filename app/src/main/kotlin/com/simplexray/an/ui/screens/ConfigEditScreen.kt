@@ -35,6 +35,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -74,6 +75,19 @@ fun ConfigEditScreen(
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val focusManager = LocalFocusManager.current
+
+    var savedScrollPosition by remember { mutableIntStateOf(0) }
+    LaunchedEffect(scrollState.value) {
+        if (!isKeyboardOpen) {
+            savedScrollPosition = scrollState.value
+        }
+    }
+    LaunchedEffect(isKeyboardOpen) {
+        if (isKeyboardOpen) {
+            kotlinx.coroutines.delay(50)
+            scrollState.scrollTo(savedScrollPosition)
+        }
+    }
     val shareLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {}
