@@ -1,5 +1,8 @@
 package com.simplexray.an.ui.screens
 
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -7,7 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -41,6 +45,18 @@ fun LogScreen(
 ) {
     val context = LocalContext.current
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsStateWithLifecycle()
+    val selectionEnd by logViewModel.selectionEnd.collectAsStateWithLifecycle()
+
+    val selectionRange = remember(selectionAnchor, selectionEnd) {
+        val anchor = selectionAnchor
+        if (anchor == null) null
+        else {
+            val end = selectionEnd ?: anchor
+            minOf(anchor, end)..maxOf(anchor, end)
+        }
+    }
+
     val isInitialLoad = remember { mutableStateOf(true) }
 
     DisposableEffect(key1 = Unit) {
@@ -51,6 +67,17 @@ fun LogScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        logViewModel.saveResult.collect { success ->
+            Toast.makeText(
+                context,
+                if (success) context.getString(R.string.log_saved)
+                else context.getString(R.string.log_save_failed),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     LaunchedEffect(filteredEntries) {
         if (filteredEntries.isNotEmpty() && isInitialLoad.value) {
             listState.animateScrollToItem(0)
@@ -58,9 +85,7 @@ fun LogScreen(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
         if (filteredEntries.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -83,8 +108,12 @@ fun LogScreen(
                     modifier = Modifier.padding(start = 6.dp, end = 6.dp),
                     reverseLayout = true
                 ) {
-                    items(filteredEntries) { logEntry ->
-                        LogEntryItem(logEntry = logEntry)
+                    itemsIndexed(filteredEntries) { index, logEntry ->
+                        LogEntryItem(
+                            logEntry = logEntry,
+                            isSelected = selectionRange?.contains(index) == true,
+                            onClick = { logViewModel.onLogEntryClick(index) }
+                        )
                     }
                 }
             }
@@ -93,9 +122,14 @@ fun LogScreen(
 }
 
 @Composable
-fun LogEntryItem(logEntry: String) {
+fun LogEntryItem(
+    logEntry: String,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {}
+) {
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
     val timestampColor = MaterialTheme.colorScheme.primary
+    val selectedBg = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
 
     val annotatedString = remember(logEntry) {
         buildAnnotatedString {
@@ -133,6 +167,11 @@ fun LogEntryItem(logEntry: String) {
         fontSize = 13.sp,
         fontFamily = FontFamily.Monospace,
         color = colorOnSurface,
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) selectedBg else Color.Transparent)
+            .clickable { onClick() }
+            .padding(vertical = 2.dp)
     )
 }
+
