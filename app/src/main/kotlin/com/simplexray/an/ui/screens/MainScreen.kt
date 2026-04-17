@@ -122,7 +122,6 @@ fun MainScreen(
             logViewModel = logViewModel,
             onCreateNewConfigFileAndEdit = callbacks.onCreateNewConfigFileAndEdit,
             onImportConfigFromClipboard = callbacks.onImportConfigFromClipboard,
-            onPerformExport = callbacks.onPerformExport,
             onPerformBackup = callbacks.onPerformBackup,
             onPerformRestore = callbacks.onPerformRestore,
             onSwitchVpnService = callbacks.onSwitchVpnService,

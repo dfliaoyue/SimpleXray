@@ -1,15 +1,22 @@
 package com.simplexray.an.ui.screens
 
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,8 +25,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -32,6 +42,7 @@ import com.simplexray.an.R
 import com.simplexray.an.ui.theme.ScrollbarDefaults
 import com.simplexray.an.viewmodel.LogViewModel
 import my.nanihadesuka.compose.LazyColumnScrollbar
+import kotlin.math.abs
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +52,19 @@ fun LogScreen(
 ) {
     val context = LocalContext.current
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
+    val selectionAnchor by logViewModel.selectionAnchor.collectAsStateWithLifecycle()
+    val selectionEnd by logViewModel.selectionEnd.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
+
+    val selectionRange = remember(selectionAnchor, selectionEnd) {
+        val anchor = selectionAnchor
+        if (anchor == null) null
+        else {
+            val end = selectionEnd ?: anchor
+            minOf(anchor, end)..maxOf(anchor, end)
+        }
+    }
+
     val isInitialLoad = remember { mutableStateOf(true) }
 
     DisposableEffect(key1 = Unit) {
@@ -51,6 +75,18 @@ fun LogScreen(
         }
     }
 
+    // Show toast when save result arrives
+    LaunchedEffect(Unit) {
+        logViewModel.saveResult.collect { success ->
+            Toast.makeText(
+                context,
+                if (success) context.getString(R.string.log_saved)
+                else context.getString(R.string.log_save_failed),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     LaunchedEffect(filteredEntries) {
         if (filteredEntries.isNotEmpty() && isInitialLoad.value) {
             listState.animateScrollToItem(0)
@@ -58,44 +94,109 @@ fun LogScreen(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
-        if (filteredEntries.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    stringResource(R.string.no_log_entries),
-                    modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        } else {
-            LazyColumnScrollbar(
-                state = listState,
-                settings = ScrollbarDefaults.defaultScrollbarSettings()
-            ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.padding(start = 6.dp, end = 6.dp),
-                    reverseLayout = true
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f)) {
+            if (filteredEntries.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    items(filteredEntries) { logEntry ->
-                        LogEntryItem(logEntry = logEntry)
+                    Text(
+                        stringResource(R.string.no_log_entries),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                LazyColumnScrollbar(
+                    state = listState,
+                    settings = ScrollbarDefaults.defaultScrollbarSettings()
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.padding(start = 6.dp, end = 6.dp),
+                        reverseLayout = true
+                    ) {
+                        itemsIndexed(filteredEntries) { index, logEntry ->
+                            LogEntryItem(
+                                logEntry = logEntry,
+                                isSelected = selectionRange?.contains(index) == true,
+                                onClick = { logViewModel.onLogEntryClick(index) }
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        // Selection action bar - shown when an anchor entry is active
+        if (selectionAnchor != null) {
+            LogSelectionActionBar(
+                selectionEnd = selectionEnd,
+                selectedCount = if (selectionRange != null)
+                    abs(selectionRange.last - selectionRange.first) + 1
+                else 1,
+                onCopy = {
+                    val range = selectionRange
+                    if (range != null) {
+                        // Copy in chronological order (oldest = highest index in reversed list)
+                        val text = (range.last downTo range.first)
+                            .mapNotNull { filteredEntries.getOrNull(it) }
+                            .joinToString("\n")
+                        clipboardManager.setText(AnnotatedString(text))
+                    }
+                    logViewModel.clearSelection()
+                },
+                onCancel = { logViewModel.clearSelection() }
+            )
         }
     }
 }
 
 @Composable
-fun LogEntryItem(logEntry: String) {
+private fun LogSelectionActionBar(
+    selectionEnd: Int?,
+    selectedCount: Int,
+    onCopy: () -> Unit,
+    onCancel: () -> Unit
+) {
+    HorizontalDivider()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (selectionEnd == null)
+                stringResource(R.string.log_selection_anchor_hint)
+            else
+                "$selectedCount entries",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f)
+        )
+        if (selectionEnd != null) {
+            TextButton(onClick = onCopy) {
+                Text(stringResource(R.string.copy_selected))
+            }
+        }
+        TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.cancel))
+        }
+    }
+}
+
+@Composable
+fun LogEntryItem(
+    logEntry: String,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {}
+) {
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
     val timestampColor = MaterialTheme.colorScheme.primary
+    val selectedBg = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
 
     val annotatedString = remember(logEntry) {
         buildAnnotatedString {
@@ -133,6 +234,11 @@ fun LogEntryItem(logEntry: String) {
         fontSize = 13.sp,
         fontFamily = FontFamily.Monospace,
         color = colorOnSurface,
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) selectedBg else Color.Transparent)
+            .clickable { onClick() }
+            .padding(vertical = 2.dp)
     )
 }
+
