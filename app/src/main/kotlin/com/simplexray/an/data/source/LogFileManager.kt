@@ -13,6 +13,8 @@ import java.io.RandomAccessFile
 
 class LogFileManager(context: Context) {
     val logFile: File
+    // writeCount is only accessed within @Synchronized methods; @Volatile makes visibility explicit.
+    @Volatile
     private var writeCount = 0
 
     init {

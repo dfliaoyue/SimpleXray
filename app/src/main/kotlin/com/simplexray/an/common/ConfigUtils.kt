@@ -113,7 +113,7 @@ object ConfigUtils {
                         if (rangeMatch != null) {
                             val start = rangeMatch.groupValues[1].toIntOrNull() ?: 0
                             val end = rangeMatch.groupValues[2].toIntOrNull() ?: 0
-                            if (end - start <= MAX_PORT_RANGE_SIZE) {
+                            if (end - start < MAX_PORT_RANGE_SIZE) {
                                 for (p in start..end) if (p in 1..65535) ports.add(p)
                             } else {
                                 // Range too large; add only the boundary ports to limit memory use

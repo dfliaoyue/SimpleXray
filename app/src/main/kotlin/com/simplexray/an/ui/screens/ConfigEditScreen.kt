@@ -1,7 +1,5 @@
 package com.simplexray.an.ui.screens
 
-private const val KEYBOARD_OPEN_RESTORE_DELAY_MS = 50L
-
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -59,6 +57,8 @@ import com.simplexray.an.ui.util.bracketMatcherTransformation
 import com.simplexray.an.viewmodel.ConfigEditUiEvent
 import com.simplexray.an.viewmodel.ConfigEditViewModel
 import kotlinx.coroutines.flow.collectLatest
+
+private const val KEYBOARD_OPEN_RESTORE_DELAY_MS = 50L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
