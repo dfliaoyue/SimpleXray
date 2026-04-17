@@ -105,7 +105,7 @@ class LogViewModel(application: Application) :
                 .flowOn(Dispatchers.Default)
                 .collect { _filteredEntries.value = it }
         }
-        // Clear selection when the search query changes
+        // Clear selection on subsequent search query changes (drop(1) skips the initial value)
         viewModelScope.launch {
             searchQuery.drop(1).collect { clearSelection() }
         }

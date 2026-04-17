@@ -42,7 +42,6 @@ import com.simplexray.an.R
 import com.simplexray.an.ui.theme.ScrollbarDefaults
 import com.simplexray.an.viewmodel.LogViewModel
 import my.nanihadesuka.compose.LazyColumnScrollbar
-import kotlin.math.abs
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -135,7 +134,7 @@ fun LogScreen(
             LogSelectionActionBar(
                 selectionEnd = selectionEnd,
                 selectedCount = if (selectionRange != null)
-                    abs(selectionRange.last - selectionRange.first) + 1
+                    selectionRange.last - selectionRange.first + 1
                 else 1,
                 onCopy = {
                     val range = selectionRange
