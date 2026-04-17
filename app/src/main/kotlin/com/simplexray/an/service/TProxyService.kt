@@ -60,15 +60,6 @@ class TProxyService : VpnService() {
             }
         }
     }
-    private val logFileBuffer: MutableList<String> = mutableListOf()
-    private val flushLogsToFileRunnable = Runnable {
-        synchronized(logFileBuffer) {
-            if (logFileBuffer.isNotEmpty()) {
-                logFileManager.appendLogs(ArrayList(logFileBuffer))
-                logFileBuffer.clear()
-            }
-        }
-    }
 
     private fun findAvailablePort(excludedPorts: Set<Int>): Int? {
         (10000..65535)
@@ -187,8 +178,6 @@ class TProxyService : VpnService() {
         super.onDestroy()
         handler.removeCallbacks(broadcastLogsRunnable)
         broadcastLogsRunnable.run()
-        handler.removeCallbacks(flushLogsToFileRunnable)
-        flushLogsToFileRunnable.run()
         serviceScope.cancel()
         Log.d(TAG, "TProxyService destroyed.")
         exitProcess(0)
@@ -294,12 +283,7 @@ class TProxyService : VpnService() {
             Log.d(TAG, "Reading xray process output.")
             var line = reader.readLine()
             while (line != null) {
-                synchronized(logFileBuffer) {
-                    logFileBuffer.add(line)
-                    if (!handler.hasCallbacks(flushLogsToFileRunnable)) {
-                        handler.postDelayed(flushLogsToFileRunnable, BROADCAST_DELAY_MS)
-                    }
-                }
+                logFileManager.appendLog(line)
                 synchronized(logBroadcastBuffer) {
                     logBroadcastBuffer.add(line)
                     if (!handler.hasCallbacks(broadcastLogsRunnable)) {
