@@ -120,8 +120,7 @@ class MainViewModel(application: Application) :
             socksPort = InputFieldState(prefs.socksPort.toString()),
             socksUser = InputFieldState(prefs.socksUsername),
             socksPass = InputFieldState(prefs.socksPassword),
-            dnsIpv4 = InputFieldState(prefs.dnsIpv4),
-            dnsIpv6 = InputFieldState(prefs.dnsIpv6),
+            vpnDns = InputFieldState(prefs.vpnDns),
             switches = SwitchStates(
                 ipv6Enabled = prefs.ipv6,
                 useTemplateEnabled = prefs.useTemplate,
@@ -221,8 +220,7 @@ class MainViewModel(application: Application) :
             socksPort = InputFieldState(prefs.socksPort.toString()),
             socksUser = InputFieldState(prefs.socksUsername),
             socksPass = InputFieldState(prefs.socksPassword),
-            dnsIpv4 = InputFieldState(prefs.dnsIpv4),
-            dnsIpv6 = InputFieldState(prefs.dnsIpv6),
+            vpnDns = InputFieldState(prefs.vpnDns),
             switches = SwitchStates(
                 ipv6Enabled = prefs.ipv6,
                 useTemplateEnabled = prefs.useTemplate,
@@ -525,39 +523,35 @@ class MainViewModel(application: Application) :
         }
     }
 
-    fun updateDnsIpv4(ipv4Addr: String): Boolean {
-        val matcher = IPV4_PATTERN.matcher(ipv4Addr)
-        return if (matcher.matches()) {
-            prefs.dnsIpv4 = ipv4Addr
+    fun updateVpnDns(vpnDnsValue: String): Boolean {
+        val normalized = vpnDnsValue.trim()
+        if (normalized.isEmpty()) {
+            prefs.vpnDns = ""
             _settingsState.value = _settingsState.value.copy(
-                dnsIpv4 = InputFieldState(ipv4Addr)
+                vpnDns = InputFieldState("")
             )
-            true
-        } else {
-            _settingsState.value = _settingsState.value.copy(
-                dnsIpv4 = InputFieldState(
-                    value = ipv4Addr,
-                    error = application.getString(R.string.invalid_ipv4),
-                    isValid = false
-                )
-            )
-            false
+            return true
         }
-    }
 
-    fun updateDnsIpv6(ipv6Addr: String): Boolean {
-        val matcher = IPV6_PATTERN.matcher(ipv6Addr)
-        return if (matcher.matches()) {
-            prefs.dnsIpv6 = ipv6Addr
+        val parts = normalized.split(",")
+        val hasEmptyPart = parts.any { it.trim().isEmpty() }
+        val allValid = !hasEmptyPart && parts.all { part ->
+            val value = part.trim()
+            IPV4_PATTERN.matcher(value).matches() || IPV6_PATTERN.matcher(value).matches()
+        }
+
+        return if (allValid) {
+            val compactValue = parts.joinToString(",") { it.trim() }
+            prefs.vpnDns = compactValue
             _settingsState.value = _settingsState.value.copy(
-                dnsIpv6 = InputFieldState(ipv6Addr)
+                vpnDns = InputFieldState(compactValue)
             )
             true
         } else {
             _settingsState.value = _settingsState.value.copy(
-                dnsIpv6 = InputFieldState(
-                    value = ipv6Addr,
-                    error = application.getString(R.string.invalid_ipv6),
+                vpnDns = InputFieldState(
+                    value = vpnDnsValue,
+                    error = application.getString(R.string.invalid_ipv4_or_ipv6),
                     isValid = false
                 )
             )
@@ -1410,4 +1404,3 @@ class MainViewModelFactory(
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
-

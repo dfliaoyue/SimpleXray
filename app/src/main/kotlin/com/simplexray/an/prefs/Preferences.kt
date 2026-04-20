@@ -139,6 +139,22 @@ class Preferences(context: Context) {
             setValueInProvider(DNS_IPV6, addr)
         }
 
+    var vpnDns: String
+        get() {
+            val value = getPrefData(VPN_DNS).first
+            if (!value.isNullOrBlank()) {
+                return value
+            }
+            val legacyDns = listOfNotNull(
+                getPrefData(DNS_IPV4).first?.trim()?.takeIf { it.isNotEmpty() },
+                getPrefData(DNS_IPV6).first?.trim()?.takeIf { it.isNotEmpty() }
+            )
+            return legacyDns.joinToString(",")
+        }
+        set(addr) {
+            setValueInProvider(VPN_DNS, addr)
+        }
+
     val udpInTcp: Boolean
         get() = getBooleanPref(UDP_IN_TCP, false)
 
@@ -334,6 +350,7 @@ class Preferences(context: Context) {
         const val SOCKS_PASS: String = "SocksPass"
         const val DNS_IPV4: String = "DnsIpv4"
         const val DNS_IPV6: String = "DnsIpv6"
+        const val VPN_DNS: String = "VpnDns"
         const val IPV4: String = "Ipv4"
         const val IPV6: String = "Ipv6"
         const val GLOBAL: String = "Global"

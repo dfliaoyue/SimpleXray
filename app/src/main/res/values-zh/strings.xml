@@ -5,6 +5,9 @@
     <string name="socks_pass">SOCKS 密码</string>
     <string name="dns_ipv4">DNS IPv4</string>
     <string name="dns_ipv6">DNS IPv6</string>
+    <string name="vpn_dns">VPN DNS</string>
+    <string name="vpn_dns_optional">可选</string>
+    <string name="vpn_dns_summary">留空则使用系统默认 DNS。若支持多个 DNS，可使用英文逗号分隔 IPv4/IPv6 地址（例如：1.1.1.1,8.8.8.8）。</string>
     <string name="ipv6">IPv6</string>
     <string name="apps_title">分应用代理</string>
     <string name="apps_summary">选择需要代理的应用,否则使用全局模式</string>
@@ -34,6 +37,10 @@
     <string name="not_select_config">未选择配置文件</string>
     <string name="filename">文件名</string>
     <string name="share">分享</string>
+    <string name="copy_netx_config">复制 NetX 配置</string>
+    <string name="copy_xray_share_format">复制 Xray 标准分享格式</string>
+    <string name="copy_config_file">复制配置文件</string>
+    <string name="export_config_to_json">导出配置文件到 JSON</string>
     <string name="export">导出</string>
     <string name="http_proxy_title">通过HTTP代理</string>
     <string name="http_proxy_summary">启用时,直接通过HTTP代理,无需经过TUN.某些应用可能会忽略此设置</string>
@@ -86,6 +93,7 @@
     <string name="bypass_selected_apps">绕过所选应用</string>
     <string name="export_to_clipboard">导出到剪贴板</string>
     <string name="export_success">导出成功</string>
+    <string name="copied_to_clipboard">已复制到剪贴板</string>
     <string name="import_invalid_format">导入格式无效</string>
     <string name="import_file">导入</string>
     <string name="reset_file">重置</string>

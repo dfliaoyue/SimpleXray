@@ -174,8 +174,7 @@ class FileManager(private val application: Application, private val prefs: Prefe
                 preferencesMap[Preferences.SOCKS_PORT] = prefs.socksPort
                 preferencesMap[Preferences.SOCKS_USER] = prefs.socksUsername
                 preferencesMap[Preferences.SOCKS_PASS] = prefs.socksPassword
-                preferencesMap[Preferences.DNS_IPV4] = prefs.dnsIpv4
-                preferencesMap[Preferences.DNS_IPV6] = prefs.dnsIpv6
+                preferencesMap[Preferences.VPN_DNS] = prefs.vpnDns
                 preferencesMap[Preferences.IPV6] = prefs.ipv6
                 preferencesMap[Preferences.APPS] = ArrayList(
                     prefs.apps ?: emptySet()
@@ -326,14 +325,17 @@ class FileManager(private val application: Application, private val prefs: Prefe
                         prefs.socksPassword = (value as String?)!!
                     }
 
-                    value = preferencesMap[Preferences.DNS_IPV4]
+                    value = preferencesMap[Preferences.VPN_DNS]
                     if (value is String) {
-                        prefs.dnsIpv4 = (value as String?)!!
-                    }
-
-                    value = preferencesMap[Preferences.DNS_IPV6]
-                    if (value is String) {
-                        prefs.dnsIpv6 = (value as String?)!!
+                        prefs.vpnDns = value
+                    } else {
+                        val legacyDnsIpv4 = (preferencesMap[Preferences.DNS_IPV4] as? String)
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                        val legacyDnsIpv6 = (preferencesMap[Preferences.DNS_IPV6] as? String)
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                        prefs.vpnDns = listOfNotNull(legacyDnsIpv4, legacyDnsIpv6).joinToString(",")
                     }
 
                     value = preferencesMap[Preferences.IPV6]

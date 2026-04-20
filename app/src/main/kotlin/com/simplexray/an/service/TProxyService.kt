@@ -409,13 +409,19 @@ class TProxyService : VpnService() {
         if (prefs.ipv4) {
             addAddress(prefs.tunnelIpv4Address, prefs.tunnelIpv4Prefix)
             addRoute("0.0.0.0", 0)
-            prefs.dnsIpv4.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }
         }
         if (prefs.ipv6) {
             addAddress(prefs.tunnelIpv6Address, prefs.tunnelIpv6Prefix)
             addRoute("::", 0)
-            prefs.dnsIpv6.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }
         }
+        prefs.vpnDns
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .forEach { dnsServer ->
+                runCatching { addDnsServer(dnsServer) }
+                    .onFailure { Log.w(TAG, "Invalid VPN DNS ignored: $dnsServer", it) }
+            }
 
         prefs.apps?.forEach { appName ->
             appName?.let { name ->

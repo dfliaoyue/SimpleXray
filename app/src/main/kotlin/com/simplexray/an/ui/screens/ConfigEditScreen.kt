@@ -1,8 +1,5 @@
 package com.simplexray.an.ui.screens
 
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,9 +12,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,9 +29,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -64,7 +56,6 @@ fun ConfigEditScreen(
     snackbarHostState: SnackbarHostState,
     viewModel: ConfigEditViewModel
 ) {
-    var showMenu by remember { mutableStateOf(false) }
     val filename by viewModel.filename.collectAsStateWithLifecycle()
     val configTextFieldValue by viewModel.configTextFieldValue.collectAsStateWithLifecycle()
     val filenameErrorMessage by viewModel.filenameErrorMessage.collectAsStateWithLifecycle()
@@ -74,9 +65,6 @@ fun ConfigEditScreen(
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val focusManager = LocalFocusManager.current
-    val shareLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {}
 
     LaunchedEffect(Unit) {
         viewModel.uiEvent.collectLatest { event ->
@@ -92,13 +80,7 @@ fun ConfigEditScreen(
                     )
                 }
 
-                is ConfigEditUiEvent.ShareContent -> {
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, event.content)
-                    }
-                    shareLauncher.launch(Intent.createChooser(shareIntent, null))
-                }
+                is ConfigEditUiEvent.ShareContent -> Unit
             }
         }
     }
@@ -122,20 +104,6 @@ fun ConfigEditScreen(
                     painter = painterResource(id = R.drawable.save),
                     contentDescription = stringResource(id = R.string.save)
                 )
-            }
-            IconButton(onClick = { showMenu = !showMenu }) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = stringResource(R.string.more)
-                )
-            }
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.share)) },
-                    onClick = {
-                        viewModel.shareConfigFile()
-                        showMenu = false
-                    })
             }
         }, scrollBehavior = scrollBehavior
         )

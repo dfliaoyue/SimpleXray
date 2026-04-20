@@ -11,6 +11,9 @@
     <string name="socks_pass">SOCKS Pass</string>
     <string name="dns_ipv4">DNS IPv4</string>
     <string name="dns_ipv6">DNS IPv6</string>
+    <string name="vpn_dns">VPN DNS</string>
+    <string name="vpn_dns_optional">Optional</string>
+    <string name="vpn_dns_summary">Leave empty to use system default DNS. If multiple DNS are supported, separate IPv4/IPv6 addresses with commas (e.g. 1.1.1.1,8.8.8.8).</string>
     <string name="ipv6">IPv6</string>
     <string name="apps_title">App-based Proxy</string>
     <string name="apps_summary">Select apps to be proxied, otherwise use global mode.</string>
@@ -40,6 +43,10 @@
     <string name="not_select_config">No profile selected</string>
     <string name="filename">Filename</string>
     <string name="share">Share</string>
+    <string name="copy_netx_config">Copy NetX config</string>
+    <string name="copy_xray_share_format">Copy Xray standard share format</string>
+    <string name="copy_config_file">Copy config file</string>
+    <string name="export_config_to_json">Export config file to JSON</string>
     <string name="export">Export</string>
     <string name="http_proxy_title">Proxy via HTTP</string>
     <string name="http_proxy_summary">When enabled, proxy directly via HTTP without TUN. Some apps may ignore this setting.</string>
@@ -92,6 +99,7 @@
     <string name="bypass_selected_apps">Bypass Selected Apps</string>
     <string name="export_to_clipboard">Export to Clipboard</string>
     <string name="export_success">Export successfully</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="import_invalid_format">Invalid import format</string>
     <string name="import_file">Import</string>
     <string name="reset_file">Reset</string>

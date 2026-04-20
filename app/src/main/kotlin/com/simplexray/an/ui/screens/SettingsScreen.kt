@@ -437,29 +437,20 @@ fun SettingsScreen(
         )
 
         EditableListItemWithBottomSheet(
-            headline = stringResource(R.string.dns_ipv4),
-            currentValue = settingsState.dnsIpv4.value,
-            onValueConfirmed = { newValue -> mainViewModel.updateDnsIpv4(newValue) },
-            label = stringResource(R.string.dns_ipv4),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            isError = !settingsState.dnsIpv4.isValid,
-            errorMessage = settingsState.dnsIpv4.error,
+            headline = stringResource(R.string.vpn_dns),
+            currentValue = settingsState.vpnDns.value,
+            onValueConfirmed = { newValue -> mainViewModel.updateVpnDns(newValue) },
+            label = stringResource(R.string.vpn_dns),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            isError = !settingsState.vpnDns.isValid,
+            errorMessage = settingsState.vpnDns.error,
             enabled = !vpnDisabled,
             sheetState = sheetState,
             scope = scope
         )
-
-        EditableListItemWithBottomSheet(
-            headline = stringResource(R.string.dns_ipv6),
-            currentValue = settingsState.dnsIpv6.value,
-            onValueConfirmed = { newValue -> mainViewModel.updateDnsIpv6(newValue) },
-            label = stringResource(R.string.dns_ipv6),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            isError = !settingsState.dnsIpv6.isValid,
-            errorMessage = settingsState.dnsIpv6.error,
-            enabled = settingsState.switches.ipv6Enabled && !vpnDisabled,
-            sheetState = sheetState,
-            scope = scope
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.vpn_dns_optional)) },
+            supportingContent = { Text(stringResource(R.string.vpn_dns_summary)) }
         )
 
         ListItem(
