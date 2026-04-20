@@ -79,13 +79,16 @@ private fun generateSimpleXrayShareLink(name: String, content: String): String {
     val outputStream = ByteArrayOutputStream()
     val deflater = Deflater()
     val buffer = ByteArray(1024)
-    deflater.setInput(input)
-    deflater.finish()
-    while (!deflater.finished()) {
-        val count = deflater.deflate(buffer)
-        outputStream.write(buffer, 0, count)
+    try {
+        deflater.setInput(input)
+        deflater.finish()
+        while (!deflater.finished()) {
+            val count = deflater.deflate(buffer)
+            outputStream.write(buffer, 0, count)
+        }
+    } finally {
+        deflater.end()
     }
-    deflater.end()
     val compressed = outputStream.toByteArray()
     val encodedContent = Base64.getUrlEncoder().encodeToString(compressed)
     val encodedName = URLEncoder.encode(name, "UTF-8")
