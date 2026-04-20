@@ -113,6 +113,13 @@ private fun generateVlessShareLink(name: String, content: String): String? {
         if (address.contains("@") || address.contains("/") || address.contains("?") || address.contains("#")) {
             return null
         }
+        val isIpv6 = address.contains(":")
+        val isValidHost = if (isIpv6) {
+            address.matches(Regex("^[0-9A-Fa-f:]+$"))
+        } else {
+            address.matches(Regex("^[A-Za-z0-9.-]+$"))
+        }
+        if (!isValidHost) return null
         val user = vnext.optJSONArray("users")?.optJSONObject(0) ?: return null
         val id = user.optString("id")
         if (id.isBlank()) return null
@@ -143,7 +150,7 @@ private fun generateVlessShareLink(name: String, content: String): String? {
         val query = queryParams.entries.joinToString("&") { (k, v) ->
             "${encodeUrlComponent(k)}=${encodeUrlComponent(v)}"
         }
-        val host = if (address.contains(":") && !address.startsWith("[") && !address.endsWith("]")) {
+        val host = if (isIpv6 && !address.startsWith("[") && !address.endsWith("]")) {
             "[$address]"
         } else {
             address

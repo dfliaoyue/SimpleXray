@@ -533,15 +533,14 @@ class MainViewModel(application: Application) :
             return true
         }
 
-        val parts = normalized.split(",")
-        val hasEmptyPart = parts.any { it.trim().isEmpty() }
-        val allValid = !hasEmptyPart && parts.all { part ->
-            val value = part.trim()
+        val trimmedParts = normalized.split(",").map { it.trim() }
+        val hasEmptyPart = trimmedParts.any { it.isEmpty() }
+        val allValid = !hasEmptyPart && trimmedParts.all { value ->
             IPV4_PATTERN.matcher(value).matches() || IPV6_PATTERN.matcher(value).matches()
         }
 
         return if (allValid) {
-            val compactValue = parts.joinToString(",") { it.trim() }
+            val compactValue = trimmedParts.joinToString(",")
             prefs.vpnDns = compactValue
             _settingsState.value = _settingsState.value.copy(
                 vpnDns = InputFieldState(compactValue)
