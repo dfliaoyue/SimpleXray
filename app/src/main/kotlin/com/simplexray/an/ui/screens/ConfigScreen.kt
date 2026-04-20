@@ -109,7 +109,10 @@ private fun generateVlessShareLink(name: String, content: String): String? {
         val vnext = vnextArray.optJSONObject(0) ?: return null
         val address = vnext.optString("address")
         val port = vnext.optInt("port", -1)
-        if (address.isBlank() || port <= 0) return null
+        if (address.isBlank() || port !in 1..65535) return null
+        if (address.contains("@") || address.contains("/") || address.contains("?") || address.contains("#")) {
+            return null
+        }
         val user = vnext.optJSONArray("users")?.optJSONObject(0) ?: return null
         val id = user.optString("id")
         if (id.isBlank()) return null
@@ -140,7 +143,12 @@ private fun generateVlessShareLink(name: String, content: String): String? {
         val query = queryParams.entries.joinToString("&") { (k, v) ->
             "${encodeUrlComponent(k)}=${encodeUrlComponent(v)}"
         }
-        val base = "vless://${encodeUrlComponent(id)}@$address:$port"
+        val host = if (address.contains(":") && !address.startsWith("[") && !address.endsWith("]")) {
+            "[$address]"
+        } else {
+            address
+        }
+        val base = "vless://${encodeUrlComponent(id)}@$host:$port"
         val fragment = encodeUrlComponent(name)
         if (query.isBlank()) "$base#$fragment" else "$base?$query#$fragment"
     }.getOrNull()
